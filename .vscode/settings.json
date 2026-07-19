@@ -1,0 +1,9 @@
+{
+    "java.project.sourcePaths": [
+        "src",
+        "Tests"
+    ],
+    "java.project.referencedLibraries": [
+        "/Users/ashish-21172/Documents/GitHub/StorageProvider/StorageProvider/lib/junit-platform-console-standalone-1.13.4.jar"
+    ]
+}
