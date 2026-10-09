@@ -4,6 +4,8 @@
         "Tests"
     ],
     "java.project.referencedLibraries": [
+        "lib/Dexter-v0.0.1-sources.jar",
+        "/Users/ashish-21172/Documents/GitHub/StorageProvider/StorageProvider/lib/Dexter-v0.0.1.jar",
         "/Users/ashish-21172/Documents/GitHub/StorageProvider/StorageProvider/lib/junit-platform-console-standalone-1.13.4.jar"
     ]
 }

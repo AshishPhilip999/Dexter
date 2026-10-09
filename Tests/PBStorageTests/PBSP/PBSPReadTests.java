@@ -1,0 +1,123 @@
+package PBStorageTests.PBSP;
+
+import static PBStorageTests.PBTestUtils.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.io.Serializable;
+import java.nio.file.Path;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import StorageStatus.PB.PBFail;
+import StorageStatus.PB.PBStatus;
+import StorageStatus.PB.PBSuccess;
+import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
+import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
+import Utility.Serialization.Serializer;
+
+public class PBSPReadTests {
+    @TempDir
+    Path dir;
+
+    static final class Person implements Serializable {
+        private static final long serialVersionUID = 1L;
+        final String name;
+        final int age;
+
+        Person(String name, int age) {
+            this.name = name;
+            this.age = age;
+        }
+    }
+
+    @Test
+    public void readOnNewStorageReturnsNullRead() throws Exception {
+        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        assertFail(PBFail.NULL_READ, sp.read());
+    }
+
+    @Test
+    public void readOnReopenedEmptyStorageReturnsNullRead() throws Exception {
+        String path = storagePath(dir, "sp");
+        new PBStorageProvider(path);
+        assertFail(PBFail.NULL_READ, new PBStorageProvider(path).read());
+    }
+
+    @Test
+    public void readReturnsReadWithWrittenData() throws Exception {
+        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        byte[] payload = bytes(50, 3);
+        sp.write(payload);
+
+        PBStatus status = sp.read();
+
+        assertEquals(PBSuccess.READ, status);
+        assertSuccess(status);
+        assertArrayEquals(payload, data(status));
+        assertNull(dataArray(status));
+    }
+
+    @Test
+    public void readDeserializesBackToObject() throws Exception {
+        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        sp.write(Serializer.serialize(new Person("Ashish", 30)));
+
+        Person person = Serializer.deserialize(data(sp.read()));
+        assertEquals("Ashish", person.name);
+        assertEquals(30, person.age);
+    }
+
+    @Test
+    public void readAfterReopen() throws Exception {
+        String path = storagePath(dir, "sp");
+        new PBStorageProvider(path).write(bytes(20, 4));
+
+        assertArrayEquals(bytes(20, 4), data(new PBStorageProvider(path).read()));
+    }
+
+    @Test
+    public void repeatedReadsReturnSameData() throws Exception {
+        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        sp.write(bytes(20, 4));
+
+        assertArrayEquals(bytes(20, 4), data(sp.read()));
+        assertArrayEquals(bytes(20, 4), data(sp.read()));
+    }
+
+    @Test
+    public void readReturnsLatestOfSeveralWrites() throws Exception {
+        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        sp.write(bytes(10, 1));
+        sp.write(bytes(20, 2));
+        sp.write(bytes(30, 3));
+
+        assertArrayEquals(bytes(30, 3), data(sp.read()));
+    }
+
+    @Test
+    public void readMaxRecordSize() throws Exception {
+        String path = storagePath(dir, "sp");
+        new PBStorageProvider(path).write(bytes(MAX_RECORD, 8));
+        assertArrayEquals(bytes(MAX_RECORD, 8), data(new PBStorageProvider(path).read()));
+    }
+
+    @Test
+    public void readAfterDeleteReturnsNullRead() throws Exception {
+        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        sp.write(bytes(10, 1));
+        sp.delete();
+        assertFail(PBFail.NULL_READ, sp.read());
+    }
+
+    @Test
+    public void readOnKeyedFileReturnsFirstLiveRecordWithoutKeyBytes() throws Exception {
+        String path = storagePath(dir, "keyed");
+        PBKeyStorageProvider<Integer> keyed = new PBKeyStorageProvider<>(path, Integer.class);
+        keyed.write(1, bytes(10, 1));
+        keyed.write(2, bytes(10, 2));
+        keyed.delete(1);
+
+        assertArrayEquals(bytes(10, 2), data(new PBStorageProvider(path).read()));
+    }
+}

@@ -7,8 +7,7 @@ import ContainerCore.Utility.ContainerObject;
 import StorageCore.Storage;
 import StorageStatus.Container.ContainerFailStatus.ContainerWriteFail;
 import StorageStatus.Writer.IOStatus;
-import Utility.IO.DATIO;
-import Utility.IO.FileType;
+import Utility.StorageProviders.FileType;
 
 class KeyContainerValidater<K extends Serializable, T extends Serializable> extends ContainerValidator<T> {
     private K key;
@@ -52,13 +51,13 @@ class KeyContainerValidater<K extends Serializable, T extends Serializable> exte
     @SuppressWarnings("unchecked")
     @Override
     protected IOStatus writeInFile(byte[] currentData) {
-        return this.fileService.write(currentData, this.key);
+        return null; //this.fileService.write(currentData, this.key);
     }
 
     @SuppressWarnings("unchecked")
     @Override
     protected IOStatus readInFile() {
-        return this.fileService.read(this.key);
+        return null; //this.fileService.read(this.key);
     }
 
     @Override
@@ -77,7 +76,7 @@ class KeyContainerValidater<K extends Serializable, T extends Serializable> exte
                 break;
             case DAT:
                 try {
-                    this.fileService = new DATIO<K>(filePath);
+                    // this.fileService = new DatIO<K>(filePath);
                 } catch (Exception e) {
                     e.printStackTrace();
                 }

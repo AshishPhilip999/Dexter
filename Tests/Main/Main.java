@@ -1,40 +1,25 @@
 package Main;
+
 import java.io.Serializable;
 
-import ContainerCore.Container.Container;
-import ContainerCore.Container.KeyContainer;
-import ContainerCore.Utility.ContainerLimitType;
-import ContainerCore.Utility.ContainerObject;
-import StorageStatus.SPStatus;
-import StorageStatus.Container.ContainerStatus;
-import StorageStatus.Container.ContainerFailStatus.ContainerReadFail;
-import StorageStatus.Container.ContainerSuccessStatus.ContainerReadSuccess;
-import Utility.IO.FileType;
-import junit.framework.Test;
+import Utility.Serialization.Serializer;
+import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 
 public class Main {
     public static void main(String[] args) {
         String path = "/Users/ashish-21172/Desktop/";
-        String containerName = path + "container1";
-        Container<Integer> container1 = new Container<>(containerName, Integer.class, FileType.DAT);
+        String containerName = path + "PBStorage";
 
-        // ContainerObject<TestObject> writeObj = container1.write(new TestObject("Hello World"));
+        try {
+            PBKeyStorageProvider<Integer> sp = new PBKeyStorageProvider<>(containerName, Integer.class);
+            TestObject tO1 = new TestObject("TO 1");
+            byte[] data1 = Serializer.serialize(tO1);
 
-        // System.out.println(writeObj.status); 
+            sp.write(data1);
 
-        ContainerObject<Integer> contObj = container1.read();
-        if(contObj.status.getSPStatus() == SPStatus.SUCCESS) {
-            ContainerReadSuccess success = (ContainerReadSuccess)contObj.status;
-            System.out.println(success);
-        } else if (contObj.status.getSPStatus() == SPStatus.FAIL) {
-            ContainerReadFail fail = (ContainerReadFail) contObj.status;
-            System.out.println(fail);
+        } catch (Exception e) {
+            System.out.println(e);
         }
-
-        // KeyContainer<Integer, TestObject> keyContainer = new KeyContainer<>(containerName, TestObject.class, FileType.DAT);
-        // Container<TestObject> keyContainer2 = keyContainer;
-        // keyContainer.write(123, new TestObject("Hello world with key"));
-        // keyContainer.write(124, new TestObject("Hello 2"));
     }
 }
 

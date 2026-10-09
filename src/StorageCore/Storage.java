@@ -5,7 +5,7 @@ import java.util.List;
 
 import ContainerCore.Container.KeyContainer;
 import ContainerCore.Utility.ContainerLimitType;
-import Utility.IO.FileType;
+import Utility.StorageProviders.FileType;
 
 public class Storage {
     private final String storageDirectory;

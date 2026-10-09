@@ -1,4 +1,4 @@
-package Utility.IO;
+package Utility.StorageProviders;
 
 public enum FileType {
     BINARY(""),

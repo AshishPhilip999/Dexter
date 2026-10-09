@@ -9,7 +9,7 @@ import StorageStatus.Container.ContainerSuccessStatus.ContainerWriteSuccess;
 
 import java.io.Serializable;
 
-import Utility.IO.FileType;
+import Utility.StorageProviders.FileType;
 
 public class KeyContainer<K extends Serializable, T extends Serializable> extends Container<T> {
     private final KeyContainerValidater<K, T> containerValidater;

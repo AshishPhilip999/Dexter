@@ -15,10 +15,9 @@ import StorageStatus.Writer.IOStatus;
 import StorageStatus.Writer.FailStatus.IOReadFail;
 import StorageStatus.Writer.FailStatus.IOWriteFail;
 import StorageStatus.Writer.SuccessStatus.IOReadSuccess;
-import Utility.IO.DATIO;
-import Utility.IO.FileService;
-import Utility.IO.FileType;
 import Utility.Serialization.Serializer;
+import Utility.StorageProviders.FileService;
+import Utility.StorageProviders.FileType;
 
 public class ContainerValidator<T extends Serializable> {
     protected byte[] currentData;
@@ -65,7 +64,7 @@ public class ContainerValidator<T extends Serializable> {
     }
 
     protected IOStatus readInFile() {
-        return fileService.read();
+        return IOReadFail.KEY_NOT_FOUND; // fileService.read();
     }
 
     protected ContainerStatus handleFileReadResponse(IOStatus readStatus, ContainerObject<T> contObj) {
@@ -122,7 +121,7 @@ public class ContainerValidator<T extends Serializable> {
 
     public SPStatus close() {
         try {
-            fileService.close();
+            // fileService.close();
             return SPStatus.SUCCESS;
         } catch (Exception e) {
             // Log Exception
@@ -158,7 +157,7 @@ public class ContainerValidator<T extends Serializable> {
     }
 
     protected IOStatus writeInFile(byte[] currentData) {
-        return this.fileService.write(this.currentData);
+        return null;
     }
 
     protected ContainerStatus handleWriteResponse(IOStatus writeResponse, byte[] writeData) {
@@ -219,7 +218,7 @@ public class ContainerValidator<T extends Serializable> {
                 break;
             case DAT:
                 try {
-                    this.fileService = new DATIO(filePath);
+                    // this.fileService = new DatIO(filePath);
                 } catch (Exception e) {
                     e.printStackTrace();
                 }

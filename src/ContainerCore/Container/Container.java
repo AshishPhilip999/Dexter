@@ -8,7 +8,7 @@ import StorageCore.Storage;
 import StorageStatus.SPStatus;
 import StorageStatus.Container.ContainerStatus;
 import StorageStatus.Container.ContainerSuccessStatus.ContainerWriteSuccess;
-import Utility.IO.FileType;
+import Utility.StorageProviders.FileType;
 
 public class Container<T extends Serializable> {
     protected final FileType fileType;
