@@ -1,11 +1,8 @@
 package StorageStatus.PB;
 
-import StorageStatus.StorageStatus;
-
 /*
-Result of every PBStorageProvider / PBKeyStorageProvider read, write and delete.
-getStatus() is SUCCESS (PBSuccess) or FAIL (PBFail).
+Marker for the detailed outcome of a read, write or delete: a PBSuccess or a
+PBFail value. Whether the operation passed is PBResult.hasSucceeded().
 */
 public interface PBStatus {
-    OperationStatus getStatus();
- }
+}

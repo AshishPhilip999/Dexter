@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBStatus;
+import StorageStatus.PB.PBResult;
 import StorageStatus.PB.PBSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
@@ -75,9 +75,9 @@ public class PBKSPWriteTests {
         PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(storagePath(dir, "ksp"), Integer.class);
         byte[] payload = { 4, 5, 6 };
 
-        PBStatus status = ksp.write(1, payload);
+        PBResult status = ksp.write(1, payload);
 
-        assertEquals(PBSuccess.WRITE, status);
+        assertEquals(PBSuccess.WRITE, status.getStatus());
         assertSuccess(status);
         assertArrayEquals(payload, data(status));
         assertNull(dataArray(status));
@@ -287,9 +287,9 @@ public class PBKSPWriteTests {
             ksp.write(i, bytes(10, i));
         }
 
-        PBStatus status = ksp.write(bytes(3, 9));
+        PBResult status = ksp.write(bytes(3, 9));
 
-        assertEquals(PBSuccess.WRITE, status);
+        assertEquals(PBSuccess.WRITE, status.getStatus());
         assertFail(PBFail.KEY_NOT_FOUND, ksp.read(0));
         assertFalse(ksp.containsKey(0));
         byte[][] records = dataArray(ksp.read());

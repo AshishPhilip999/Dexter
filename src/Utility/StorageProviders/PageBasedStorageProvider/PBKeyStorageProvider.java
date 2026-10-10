@@ -2,53 +2,85 @@ package Utility.StorageProviders.PageBasedStorageProvider;
 
 import java.io.Serializable;
 import java.lang.invoke.MethodType;
-import java.util.HashMap;
-import java.util.List;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.Map;
 
 import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBStatus;
+import StorageStatus.PB.PBResult;
 import StorageStatus.PB.PBSuccess;
-import StorageStatus.PB.OperationStatus;
+import Utility.Constants.Extension;
 import Utility.Encoding.KeyCodec;
+import Utility.StorageProviders.PageBasedStorageProvider.Index.BPlusTree;
+import Utility.StorageProviders.PageBasedStorageProvider.Index.IndexFile;
+import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexBundle;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.Page;
-import Utility.StorageProviders.PageBasedStorageProvider.Utility.Slot;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.RecordID;
+import Utility.StorageProviders.PageBasedStorageProvider.Utility.Slot;
 
 /*
-Key based variant of PBStorageProvider. Page / slot orchestration, file IO and
-the keyless write() is inherited from the parent; this class adds the
-key -> RecordID index on top, and read() returns every record.
+Key based variant of PBStorageProvider. Page / slot handling, file IO and the
+keyless write() are inherited from the parent; this class adds a key index on
+top, and read() returns every record.
 
-Each keyed record is stored as [encoded key][data], with the key's byte
-size kept in the slot (keyLength). Keys are encoded compactly by KeyCodec.
-On startup the index is rebuilt from those stored keys, so keyed reads work
-across program restarts.
+Both files live in the storage's .dex folder (see DexBundle). Records are
+stored as [encoded key][data] in data.pb; the index lives in index.pbi as two
+disk-based B+ trees:
 
-The key type is given twice in one place, at initialisation:
+    key index    encoded key -> (page, slot) of the key's live record
+    free space   (fullLength, page, slot) of every deleted slot, smallest first,
+                 so a write can find the best-fitting slot to reuse
+
+Thread safety: as for PBStorageProvider. write / delete / reconstructKeyIndex
+are exclusive; read / containsKey run in parallel with each other.
+
+Only the pages a call touches are read, through small page caches, so memory
+use does not grow with the number of records and opening a file only reads its
+headers. The index file records the data file's id; if it is missing or
+belongs to another data file it is rebuilt from the data pages on open.
+
+The key type is given at initialisation:
     new PBKeyStorageProvider<>(path, Integer.class)
-The key type is stored in the file header. Opening an existing file with a
-different key type throws IllegalStateException.
-The generic K makes a wrong key a compile error; the Class<K> argument keeps the
-type at runtime so raw-typed / unchecked callers are still rejected.
+and stored in the data file's header. Opening an existing file with a different
+key type throws IllegalStateException. The generic K makes a wrong key a
+compile error; the Class<K> argument keeps the type at runtime so raw-typed /
+unchecked callers are still rejected.
 */
 public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvider {
     /*
-    Key -> location (page, slot) of the live record for that key.
+    Largest encoded key the index accepts (KEY_TOO_LARGE above this).
     */
-    private final Map<K, RecordID> keyIndex;
+    public static final int MAX_KEY_BYTES = BPlusTree.MAX_KEY_SIZE;
+
+    private static final int KEY_INDEX_TREE = 0;
+    private static final int FREE_SPACE_TREE = 1;
+    private static final byte[] NO_VALUE = new byte[0];
 
     /*
     The single key type this instance accepts.
     */
     private final Class<?> keyType;
 
+    /*
+    The .pbi file holding both trees.
+    */
+    private final IndexFile indexFile;
+
+    /*
+    Encoded key -> RecordID (page number + slot number) of its live record.
+    */
+    private final BPlusTree keyIndex;
+
+    /*
+    Deleted slots ordered by (fullLength, page, slot), for best-fit reuse.
+    */
+    private final BPlusTree freeSpace;
+
     public PBKeyStorageProvider(String path, Class<K> keyType) throws Exception {
         super(path);
         if (keyType == null) {
             throw new IllegalArgumentException("Key type cannot be null");
         }
-        this.keyIndex = new HashMap<>();
 
         /*
         Keys always arrive boxed (write(5, ...) passes an Integer), and a primitive
@@ -61,7 +93,14 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
             : keyType;
 
         this.bindStoredKeyType();
-        this.reconstructKeyIndex();
+
+        this.indexFile = new IndexFile(DexBundle.indexPath(this.getFolder()), Extension.PBI);
+        this.keyIndex = new BPlusTree(this.indexFile, KEY_INDEX_TREE);
+        this.freeSpace = new BPlusTree(this.indexFile, FREE_SPACE_TREE);
+
+        if (this.indexFile.getDataFileId() != this.getFileId()) {
+            this.reconstructKeyIndex();
+        }
     }
 
     /*
@@ -83,24 +122,40 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     }
 
     /*
-    Rebuilds the key -> RecordID map by walking every slot of every page and
-    reading the key stored in front of each live record. Deleted slots (old
-    versions of overwritten keys) and keyless slots are skipped.
+    Rebuilds the index file from the data pages: every live keyed record goes
+    into the key index, every deleted slot into the free-space tree. Runs
+    automatically on open when the index file is missing or doesn't belong to
+    the data file; call it yourself to repair an index after a crash.
     */
-    @SuppressWarnings("unchecked")
     public void reconstructKeyIndex() throws Exception {
-        this.keyIndex.clear();
+        this.writeLock().lock();
+        try {
+            this.rebuildIndex();
+        } finally {
+            this.writeLock().unlock();
+        }
+    }
 
-        for (Page page : this.getPages()) {
-            List<Slot> slots = page.getSlots();
+    private void rebuildIndex() throws Exception {
+        this.indexFile.clear();
 
-            for (short slotNumber = 0; slotNumber < slots.size(); slotNumber++) {
-                Slot slot = slots.get(slotNumber);
-                if (slot.isDeleted() || slot.getKeyLength() == 0) {
+        for (int pageNumber = 0; pageNumber < this.getPageCount(); pageNumber++) {
+            Page page = this.getPage(pageNumber);
+
+            for (short slotNumber = 0; slotNumber < page.getSlots().size(); slotNumber++) {
+                Slot slot = page.getSlots().get(slotNumber);
+                RecordID recordID = new RecordID(pageNumber, slotNumber);
+
+                if (slot.isDeleted()) {
+                    this.onSlotFreed(recordID, slot);
+                    continue;
+                }
+                if (slot.getKeyLength() == 0) {
                     continue;
                 }
 
-                Object key = KeyCodec.decode(this.readSlotKey(slot));
+                byte[] keyBytes = this.readSlotKey(slot);
+                Object key = KeyCodec.decode(keyBytes);
                 if (!this.keyType.isInstance(key)) {
                     throw new IllegalStateException(
                         "Stored key of type " + key.getClass().getName()
@@ -108,177 +163,285 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
                     );
                 }
 
-                this.keyIndex.put((K) key, new RecordID(page.getPageNumber(), slotNumber));
+                byte[] previous = this.keyIndex.put(keyBytes, encodeRecordID(recordID));
+                if (previous != null) {
+                    // Two live records for one key (e.g. a crash mid-overwrite): keep the later one.
+                    this.markSlotDeleted(decodeRecordID(previous));
+                }
             }
         }
+
+        this.indexFile.setDataFileId(this.getFileId());
     }
 
     /*
     Keyless write behaves exactly like the parent: all existing pages are dropped
-    and a single new page is written with this data. The key index is cleared
-    too, otherwise old keys would point at RecordIDs (e.g. page 0, slot 0) that
-    now hold the keyless data.
-    SUCCESS: PBSuccess.WRITE, getData() holds the written data
+    and a single new page is written with this data. The index is cleared too.
+    SUCCESS: PBSuccess.WRITE, result.getData() holds the written data
     FAIL:    NULL_WRITE, DATA_TOO_LARGE, WRITE_ERROR
     */
     @Override
-    public PBStatus write(byte[] data) {
-        PBStatus status = super.write(data);
-        if (status.getStatus() == OperationStatus.SUCCESS) {
-            this.keyIndex.clear();
+    public PBResult write(byte[] data) {
+        this.writeLock().lock();
+        try {
+            PBResult result = super.write(data);
+            if (!result.hasSucceeded()) {
+                return result;
+            }
+
+            this.resetIndex();
+        } catch (Exception e) {
+            return PBResult.of(PBFail.WRITE_ERROR);
+        } finally {
+            this.writeLock().unlock();
         }
-        return status;
+        return PBResult.of(PBSuccess.WRITE, data);
     }
 
     /*
     Writes data against a key. The record [encoded key][data] goes into the
     best-fitting deleted slot if one is big enough; otherwise it is appended to
-    the last page (slot directory grows forward from the header, data grows
-    backward from the page end), or to a new page if that one is full.
-    Writing an existing key appends the new record first, then marks the old
-    slot as deleted (upsert).
-    SUCCESS: PBSuccess.WRITE, getData() holds the written data
+    the last page, or to a new page if that one is full. The key index then
+    points the key at it. Writing an existing key stores the new record first,
+    then marks the old slot as deleted (upsert).
+    SUCCESS: PBSuccess.WRITE, result.getData() holds the written data
     FAIL:    NULL_KEY, KEY_TYPE_MISMATCH, NULL_WRITE, KEY_ENCODE_ERROR,
-             DATA_TOO_LARGE, WRITE_ERROR
+             KEY_TOO_LARGE, DATA_TOO_LARGE, WRITE_ERROR
     */
-    public PBStatus write(K key, byte[] data) {
+    public PBResult write(K key, byte[] data) {
         PBFail invalidKey = this.validateKey(key);
         if (invalidKey != null) {
-            return invalidKey;
+            return PBResult.of(invalidKey);
         }
         if (data == null || data.length == 0) {
-            return PBFail.NULL_WRITE;
+            return PBResult.of(PBFail.NULL_WRITE);
         }
 
         byte[] keyBytes;
         try {
             keyBytes = KeyCodec.encode(key);
         } catch (Exception e) {
-            return PBFail.KEY_ENCODE_ERROR;
+            return PBResult.of(PBFail.KEY_ENCODE_ERROR);
+        }
+        if (keyBytes.length > MAX_KEY_BYTES) {
+            return PBResult.of(PBFail.KEY_TOO_LARGE);
         }
 
         PBFail invalidRecord = this.validateRecord(keyBytes.length, data);
         if (invalidRecord != null) {
-            return invalidRecord;
+            return PBResult.of(invalidRecord);
         }
 
+        this.writeLock().lock();
         try {
-            RecordID existing = this.keyIndex.get(key);
-
             RecordID placed = this.placeRecord(keyBytes, data);
+            byte[] previous = this.keyIndex.put(keyBytes, encodeRecordID(placed));
 
-            if (existing != null) {
-                this.markSlotDeleted(existing);
+            if (previous != null) {
+                this.markSlotDeleted(decodeRecordID(previous));
             }
-
-            this.keyIndex.put(key, placed);
         } catch (Exception e) {
-            return PBFail.WRITE_ERROR;
+            return PBResult.of(PBFail.WRITE_ERROR);
+        } finally {
+            this.writeLock().unlock();
         }
 
-        return PBSuccess.write(data);
+        return PBResult.of(PBSuccess.WRITE, data);
     }
 
     /*
-    Reads the data written against a key.
-    SUCCESS: PBSuccess.READ, getData() holds the record
+    Reads the data written against a key: index lookup, then the data page.
+    SUCCESS: PBSuccess.READ, result.getData() holds the record
     FAIL:    NULL_KEY, KEY_TYPE_MISMATCH, KEY_NOT_FOUND, READ_ERROR
     */
-    public PBStatus read(K key) {
+    public PBResult read(K key) {
         PBFail invalidKey = this.validateKey(key);
         if (invalidKey != null) {
-            return invalidKey;
+            return PBResult.of(invalidKey);
         }
 
-        RecordID recordID = this.keyIndex.get(key);
-        if (recordID == null) {
-            return PBFail.KEY_NOT_FOUND;
+        byte[] keyBytes = this.encodeForLookup(key);
+        if (keyBytes == null) {
+            return PBResult.of(PBFail.KEY_NOT_FOUND);
         }
 
-        Slot slot = this.getSlot(recordID);
-        if (slot == null || slot.isDeleted()) {
-            return PBFail.KEY_NOT_FOUND;
-        }
-
+        this.readLock().lock();
         try {
-            return PBSuccess.read(this.readSlot(slot));
+            byte[] location = this.keyIndex.get(keyBytes);
+            if (location == null) {
+                return PBResult.of(PBFail.KEY_NOT_FOUND);
+            }
+
+            Slot slot = this.getSlot(decodeRecordID(location));
+            if (slot == null || slot.isDeleted() || slot.getKeyLength() != keyBytes.length) {
+                return PBResult.of(PBFail.READ_ERROR);
+            }
+
+            byte[] record = this.readRecord(slot);
+            if (!Arrays.equals(record, 0, keyBytes.length, keyBytes, 0, keyBytes.length)) {
+                return PBResult.of(PBFail.READ_ERROR);
+            }
+            return PBResult.of(PBSuccess.READ, Arrays.copyOfRange(record, keyBytes.length, record.length));
         } catch (Exception e) {
-            return PBFail.READ_ERROR;
+            return PBResult.of(PBFail.READ_ERROR);
+        } finally {
+            this.readLock().unlock();
         }
     }
 
     /*
-    Every live record (all keys), one entry per record in write order, each
-    deserializable back into its own object. Overrides the parent's read(),
-    which returns only the first record.
-    SUCCESS: PBSuccess.READ, getDataArray() holds the records
+    Every live record (all keys), one entry per record in page and slot order,
+    each deserializable back into its own object. Overrides the parent's
+    read(), which returns only the first record.
+    SUCCESS: PBSuccess.READ, result.getDataArray() holds the records
     FAIL:    NULL_READ (nothing stored), READ_ERROR
     */
     @Override
-    public PBStatus read() {
+    public PBResult read() {
         byte[][] records;
+        this.readLock().lock();
         try {
             records = this.readAllRecords();
         } catch (Exception e) {
-            return PBFail.READ_ERROR;
+            return PBResult.of(PBFail.READ_ERROR);
+        } finally {
+            this.readLock().unlock();
         }
 
         if (records.length == 0) {
-            return PBFail.NULL_READ;
+            return PBResult.of(PBFail.NULL_READ);
         }
-        return PBSuccess.readAll(records);
+        return PBResult.ofAll(PBSuccess.READ, records);
     }
 
     /*
-    Deletes the record of one key: its slot is marked deleted (and becomes
-    reusable by later writes) and the key is removed from the index.
+    Deletes the record of one key: the key leaves the index, and its slot is
+    marked deleted and becomes reusable by later writes.
     SUCCESS: PBSuccess.DELETE
     FAIL:    NULL_KEY, KEY_TYPE_MISMATCH, KEY_NOT_FOUND, DELETE_ERROR
     */
-    public PBStatus delete(K key) {
+    public PBResult delete(K key) {
         PBFail invalidKey = this.validateKey(key);
         if (invalidKey != null) {
-            return invalidKey;
+            return PBResult.of(invalidKey);
         }
 
-        RecordID recordID = this.keyIndex.get(key);
-        if (recordID == null) {
-            return PBFail.KEY_NOT_FOUND;
+        byte[] keyBytes = this.encodeForLookup(key);
+        if (keyBytes == null) {
+            return PBResult.of(PBFail.KEY_NOT_FOUND);
         }
 
+        this.writeLock().lock();
         try {
-            this.markSlotDeleted(recordID);
+            byte[] location = this.keyIndex.remove(keyBytes);
+            if (location == null) {
+                return PBResult.of(PBFail.KEY_NOT_FOUND);
+            }
+            this.markSlotDeleted(decodeRecordID(location));
         } catch (Exception e) {
-            return PBFail.DELETE_ERROR;
+            return PBResult.of(PBFail.DELETE_ERROR);
+        } finally {
+            this.writeLock().unlock();
         }
 
-        this.keyIndex.remove(key);
-        return PBSuccess.DELETE;
+        return PBResult.of(PBSuccess.DELETE);
     }
 
     /*
-    Erases everything, like the parent, and clears the key index.
+    Erases everything, like the parent, and clears the index.
     SUCCESS: PBSuccess.DELETE
     FAIL:    DELETE_ERROR
     */
     @Override
-    public PBStatus delete() {
-        PBStatus status = super.delete();
-        if (status.getStatus() == OperationStatus.SUCCESS) {
-            this.keyIndex.clear();
+    public PBResult delete() {
+        this.writeLock().lock();
+        try {
+            PBResult result = super.delete();
+            if (!result.hasSucceeded()) {
+                return result;
+            }
+
+            this.resetIndex();
+        } catch (Exception e) {
+            return PBResult.of(PBFail.DELETE_ERROR);
+        } finally {
+            this.writeLock().unlock();
         }
-        return status;
+        return PBResult.of(PBSuccess.DELETE);
     }
 
     /*
-    false for a null key or a key of the wrong type.
+    false for a null key, a key of the wrong type, or on a read error.
     */
     public boolean containsKey(K key) {
-        return this.validateKey(key) == null && this.keyIndex.containsKey(key);
+        if (this.validateKey(key) != null) {
+            return false;
+        }
+        byte[] keyBytes = this.encodeForLookup(key);
+        if (keyBytes == null) {
+            return false;
+        }
+        this.readLock().lock();
+        try {
+            return this.keyIndex.get(keyBytes) != null;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            this.readLock().unlock();
+        }
     }
 
     public Class<?> getKeyType() {
         return this.keyType;
+    }
+
+    /*
+    Index pages currently held in memory.
+    */
+    protected int getCachedIndexPageCount() {
+        return this.indexFile.getCachedPageCount();
+    }
+
+    // ---- free-space hooks -----------------------------------------------------
+
+    /*
+    Best fit: the smallest deleted slot whose fullLength is >= recordLength.
+    Stale entries (slot no longer deleted or too small) are dropped.
+    */
+    @Override
+    protected RecordID takeFreeSlot(short recordLength) throws Exception {
+        byte[] from = freeSpaceKey(recordLength, 0, (short) 0);
+
+        Map.Entry<byte[], byte[]> entry;
+        while ((entry = this.freeSpace.ceiling(from)) != null) {
+            byte[] entryKey = entry.getKey();
+            this.freeSpace.remove(entryKey);
+
+            ByteBuffer buffer = ByteBuffer.wrap(entryKey);
+            buffer.getShort();
+            RecordID recordID = new RecordID(buffer.getInt(), buffer.getShort());
+
+            Slot slot = this.getSlot(recordID);
+            if (slot != null && slot.isDeleted() && slot.getFullLength() >= recordLength) {
+                return recordID;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    protected void onSlotFreed(RecordID recordID, Slot slot) throws Exception {
+        this.freeSpace.put(freeSpaceKey(slot.getFullLength(), recordID.pageNumber, recordID.slotNumber), NO_VALUE);
+    }
+
+    // ---- helpers --------------------------------------------------------------
+
+    /*
+    Empty index for the (just erased) data file, tagged with its new id.
+    */
+    private void resetIndex() throws Exception {
+        this.indexFile.clear();
+        this.indexFile.setDataFileId(this.getFileId());
     }
 
     /*
@@ -292,5 +455,41 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
             return PBFail.KEY_TYPE_MISMATCH;
         }
         return null;
+    }
+
+    /*
+    Encoded key, or null if it can't be encoded or is too large to be stored
+    (such a key can never be in the index).
+    */
+    private byte[] encodeForLookup(K key) {
+        try {
+            byte[] keyBytes = KeyCodec.encode(key);
+            return keyBytes.length > MAX_KEY_BYTES ? null : keyBytes;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /*
+    (fullLength, page, slot) as big-endian bytes, so byte order = size order.
+    */
+    private static byte[] freeSpaceKey(short fullLength, int pageNumber, short slotNumber) {
+        return ByteBuffer.allocate(Short.BYTES + Integer.BYTES + Short.BYTES)
+                         .putShort(fullLength)
+                         .putInt(pageNumber)
+                         .putShort(slotNumber)
+                         .array();
+    }
+
+    private static byte[] encodeRecordID(RecordID recordID) {
+        return ByteBuffer.allocate(Integer.BYTES + Short.BYTES)
+                         .putInt(recordID.pageNumber)
+                         .putShort(recordID.slotNumber)
+                         .array();
+    }
+
+    private static RecordID decodeRecordID(byte[] bytes) {
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        return new RecordID(buffer.getInt(), buffer.getShort());
     }
 }

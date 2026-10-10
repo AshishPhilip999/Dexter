@@ -1,5 +1,6 @@
 package Utility.FileServices;
 
+import java.io.EOFException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -50,11 +51,24 @@ public class RandomAccessFileService {
     }
 
     public byte[] read(long seekPos, short dataLength) throws Exception {
-        this.randomAccessFile.seek(seekPos);
-        byte[] data = new byte[dataLength];
-        this.randomAccessFile.readFully(data);
+        return this.read(seekPos, (int) dataLength);
+    }
 
-        return data;
+    /*
+    Reads length bytes at seekPos with positional reads (no seek), e.g. a whole
+    page in one call. Throws EOFException if the file ends first.
+    */
+    public byte[] read(long seekPos, int length) throws Exception {
+        ByteBuffer buffer = ByteBuffer.allocate(length);
+        long position = seekPos;
+        while (buffer.hasRemaining()) {
+            int read = this.channel.read(buffer, position);
+            if (read < 0) {
+                throw new EOFException("Read past end of file at " + position);
+            }
+            position += read;
+        }
+        return buffer.array();
     }
 
     public void writeLong(long seekPos, long value) throws Exception {

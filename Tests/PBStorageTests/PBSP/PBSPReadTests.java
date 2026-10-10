@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBStatus;
+import StorageStatus.PB.PBResult;
 import StorageStatus.PB.PBSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
@@ -50,9 +50,9 @@ public class PBSPReadTests {
         byte[] payload = bytes(50, 3);
         sp.write(payload);
 
-        PBStatus status = sp.read();
+        PBResult status = sp.read();
 
-        assertEquals(PBSuccess.READ, status);
+        assertEquals(PBSuccess.READ, status.getStatus());
         assertSuccess(status);
         assertArrayEquals(payload, data(status));
         assertNull(dataArray(status));
