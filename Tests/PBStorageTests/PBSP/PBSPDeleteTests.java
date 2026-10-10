@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBStatus;
+import StorageStatus.PB.PBResult;
 import StorageStatus.PB.PBSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
@@ -23,16 +23,16 @@ public class PBSPDeleteTests {
         PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
         sp.write(bytes(10, 1));
 
-        PBStatus status = sp.delete();
+        PBResult status = sp.delete();
 
-        assertEquals(PBSuccess.DELETE, status);
+        assertEquals(PBSuccess.DELETE, status.getStatus());
         assertSuccess(status);
     }
 
     @Test
     public void deleteOnEmptyStorageSucceeds() throws Exception {
         PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
-        assertEquals(PBSuccess.DELETE, sp.delete());
+        assertEquals(PBSuccess.DELETE, sp.delete().getStatus());
     }
 
     @Test
@@ -40,8 +40,8 @@ public class PBSPDeleteTests {
         PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
         sp.write(bytes(10, 1));
 
-        assertEquals(PBSuccess.DELETE, sp.delete());
-        assertEquals(PBSuccess.DELETE, sp.delete());
+        assertEquals(PBSuccess.DELETE, sp.delete().getStatus());
+        assertEquals(PBSuccess.DELETE, sp.delete().getStatus());
         assertFail(PBFail.NULL_READ, sp.read());
     }
 
@@ -94,7 +94,7 @@ public class PBSPDeleteTests {
             keyed.write(i, bytes(10, i));
         }
 
-        assertEquals(PBSuccess.DELETE, new PBStorageProvider(path).delete());
+        assertEquals(PBSuccess.DELETE, new PBStorageProvider(path).delete().getStatus());
 
         PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
         assertFail(PBFail.NULL_READ, reopened.read());

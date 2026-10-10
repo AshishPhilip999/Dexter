@@ -32,6 +32,11 @@ public enum PBFail implements PBStatus {
     KEY_ENCODE_ERROR,
 
     /*
+    Encoded key is longer than the index allows (BPlusTree.MAX_KEY_SIZE, 1024 bytes).
+    */
+    KEY_TOO_LARGE,
+
+    /*
     Key bytes + data don't fit into one page.
     */
     DATA_TOO_LARGE,
@@ -51,9 +56,4 @@ public enum PBFail implements PBStatus {
     */
     DELETE_ERROR
     ;
-
-    @Override
-    public OperationStatus getStatus() {
-        return OperationStatus.FAIL;
-    }
 }

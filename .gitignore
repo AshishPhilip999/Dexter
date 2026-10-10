@@ -1,0 +1,43 @@
+# ---- Build output ----
+# Compiled classes (VS Code Java builds into bin/)
+bin/
+out/
+target/
+build/
+*.class
+
+# ---- Generated test / runtime data ----
+# Storage files written by the tests and by Main
+TestData/
+*.pb
+*.pbi
+*.dex/
+*.index
+
+# ---- macOS ----
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+
+# ---- Editors / IDEs ----
+# Keep the shared VS Code project settings (source paths, libraries),
+# ignore everything else in .vscode.
+.vscode/*
+!.vscode/settings.json
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+*.swp
+*~
+
+# ---- Logs / crash dumps / temp ----
+*.log
+hs_err_pid*
+replay_pid*
+*.tmp
+*.tgz

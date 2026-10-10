@@ -3,7 +3,9 @@ package Utility.Constants;
 public enum Extension {
     DAT(".dat"),
     JSON(".json"),
-    PB(".pb")
+    PB(".pb"),
+    PBI(".pbi"),
+    DEX(".dex")
     ;
 
     private String value;

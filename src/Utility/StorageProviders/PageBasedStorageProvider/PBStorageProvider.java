@@ -2,75 +2,114 @@ package Utility.StorageProviders.PageBasedStorageProvider;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayDeque;
+import java.nio.file.Path;
+import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Deque;
 import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBStatus;
+import StorageStatus.PB.PBResult;
 import StorageStatus.PB.PBSuccess;
 import Utility.Constants.Extension;
 import Utility.FileServices.RandomAccessFileService;
+import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexBundle;
+import Utility.StorageProviders.PageBasedStorageProvider.Utility.LruCache;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.PBOffSets;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.Page;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.PageHeader;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.RecordID;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.Slot;
 
+/*
+Thread safety: one instance can be shared by any number of threads. Writes and
+deletes take an exclusive lock; reads share a lock, so they run in parallel
+with each other but never alongside a write. Use one instance per storage:
+two instances (or two programs) on the same .dex folder are not coordinated.
+*/
 public class PBStorageProvider {
+    /*
+    Data pages kept in memory at most; older ones are dropped and re-read from
+    disk when needed. 1024 pages = about 4 MB of page data.
+    */
+    public static final int DEFAULT_CACHE_PAGES = 1024;
+
     private static final byte[] NO_KEY = new byte[0];
 
-    private List<Page> pages;
+    /*
+    Exclusive for write / delete, shared for read.
+    */
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
     /*
-    Deleted slots available for reuse, ordered by fullLength (a red-black tree),
-    so the smallest slot that fits a record is found in O(log n).
-    fullLength -> deleted slots of that size.
+    The last 8 bytes of the file header hold a random id identifying this data
+    file, so an index file can tell whether it belongs to it.
     */
-    private TreeMap<Short, Deque<RecordID>> freeSlots;
+    private static final int FILE_ID_OFFSET = PBOffSets.FILE_HEADER.getValue() - Long.BYTES;
+    private static final int MAX_KEY_TYPE_NAME = FILE_ID_OFFSET - Short.BYTES;
+
+    /*
+    Number of pages in the file. Pages themselves are loaded on demand.
+    */
+    private int pageCount;
+
+    /*
+    Recently used pages, page number -> page. Writes go straight to disk, so an
+    evicted page never needs saving.
+    */
+    private final LruCache<Integer, Page> pageCache;
 
     /*
     Class name of the key type stored in the file header, or null if none.
     */
     private String storedKeyType;
 
+    private long fileId;
+
     private RandomAccessFileService randomAccessFileService;
 
     /*
-    Opens (or creates) the storage file. Pages and slots already in the file are
-    loaded back, so the storage survives a program restart.
+    The storage's .dex folder.
+    */
+    private final Path folder;
+
+    /*
+    Opens (or creates) the storage: the folder path + ".dex" with the data file
+    data.pb inside ("data/users" and "data/users.dex" are the same storage).
+    Only the file header is read; pages are loaded when first used, so opening
+    takes the same time for any file size.
     */
     public PBStorageProvider(String path) throws Exception {
-        this.randomAccessFileService = new RandomAccessFileService(path, Extension.PB);
-        this.pages = new ArrayList<>();
-        this.freeSlots = new TreeMap<>();
+        this.folder = DexBundle.open(path);
+        this.randomAccessFileService = new RandomAccessFileService(DexBundle.dataPath(this.folder), Extension.PB);
+        this.pageCache = new LruCache<>(DEFAULT_CACHE_PAGES);
         this.loadFileHeader();
-        this.loadPages();
+        this.pageCount = this.countPages();
     }
 
     /*
     Drops all existing pages (in memory and on disk) and writes a single new page
     with this data.
-    SUCCESS: PBSuccess.WRITE, getData() holds the written data
+    SUCCESS: PBSuccess.WRITE, result.getData() holds the written data
     FAIL:    NULL_WRITE, DATA_TOO_LARGE, WRITE_ERROR
     */
-    public PBStatus write(byte[] data) {
+    public PBResult write(byte[] data) {
         PBFail invalid = this.validateRecord(0, data);
         if (invalid != null) {
-            return invalid;
+            return PBResult.of(invalid);
         }
 
+        this.writeLock().lock();
         try {
             this.createNewPage(data);
         } catch (Exception e) {
-            return PBFail.WRITE_ERROR;
+            return PBResult.of(PBFail.WRITE_ERROR);
+        } finally {
+            this.writeLock().unlock();
         }
 
-        return PBSuccess.write(data);
+        return PBResult.of(PBSuccess.WRITE, data);
     }
 
     /*
@@ -79,35 +118,57 @@ public class PBStorageProvider {
     SUCCESS: PBSuccess.DELETE
     FAIL:    DELETE_ERROR
     */
-    public PBStatus delete() {
+    public PBResult delete() {
+        this.writeLock().lock();
         try {
             this.clearAll();
         } catch (Exception e) {
-            return PBFail.DELETE_ERROR;
+            return PBResult.of(PBFail.DELETE_ERROR);
+        } finally {
+            this.writeLock().unlock();
         }
 
-        return PBSuccess.DELETE;
+        return PBResult.of(PBSuccess.DELETE);
     }
 
     /*
     The data written by write(data): the first live record in the file.
-    SUCCESS: PBSuccess.READ, getData() holds the record
+    SUCCESS: PBSuccess.READ, result.getData() holds the record
     FAIL:    NULL_READ (nothing stored), READ_ERROR
     */
-    public PBStatus read() {
+    public PBResult read() {
+        this.readLock().lock();
         try {
-            for (Page page : this.pages) {
-                for (Slot slot : page.getSlots()) {
+            for (int pageNumber = 0; pageNumber < this.pageCount; pageNumber++) {
+                for (Slot slot : this.getPage(pageNumber).getSlots()) {
                     if (!slot.isDeleted()) {
-                        return PBSuccess.read(this.readSlot(slot));
+                        return PBResult.of(PBSuccess.READ, this.readSlot(slot));
                     }
                 }
             }
         } catch (Exception e) {
-            return PBFail.READ_ERROR;
+            return PBResult.of(PBFail.READ_ERROR);
+        } finally {
+            this.readLock().unlock();
         }
 
-        return PBFail.NULL_READ;
+        return PBResult.of(PBFail.NULL_READ);
+    }
+
+    /*
+    Shared lock for operations that only read. Subclasses wrap their read
+    operations in it.
+    */
+    protected Lock readLock() {
+        return this.lock.readLock();
+    }
+
+    /*
+    Exclusive lock for operations that change the storage. Reentrant, so a
+    subclass holding it can call the parent's write / delete.
+    */
+    protected Lock writeLock() {
+        return this.lock.writeLock();
     }
 
     /*
@@ -118,8 +179,12 @@ public class PBStorageProvider {
     */
     protected byte[][] readAllRecords() throws Exception {
         List<byte[]> records = new ArrayList<>();
-        for(Page page : this.pages) {
-            this.readPage(page, records);
+        for (int pageNumber = 0; pageNumber < this.pageCount; pageNumber++) {
+            for (Slot slot : this.getPage(pageNumber).getSlots()) {
+                if (!slot.isDeleted()) {
+                    records.add(this.readSlot(slot));
+                }
+            }
         }
 
         return records.toArray(new byte[0][]);
@@ -141,10 +206,44 @@ public class PBStorageProvider {
     }
 
     /*
-    Read-only view of the pages, for subclasses walking every slot.
+    The storage's .dex folder.
     */
-    protected List<Page> getPages() {
-        return Collections.unmodifiableList(this.pages);
+    public Path getFolder() {
+        return this.folder;
+    }
+
+    /*
+    Random id of this data file, kept in the file header (never 0).
+    */
+    protected long getFileId() {
+        return this.fileId;
+    }
+
+    protected int getPageCount() {
+        return this.pageCount;
+    }
+
+    /*
+    Data pages currently held in memory.
+    */
+    protected int getCachedPageCount() {
+        return this.pageCache.size();
+    }
+
+    /*
+    The page, from the cache or, if not cached, read from disk in one call.
+    */
+    protected Page getPage(int pageNumber) throws Exception {
+        if (pageNumber < 0 || pageNumber >= this.pageCount) {
+            return null;
+        }
+
+        Page page = this.pageCache.get(pageNumber);
+        if (page == null) {
+            page = this.loadPage(pageNumber);
+            this.pageCache.put(pageNumber, page);
+        }
+        return page;
     }
 
     /*
@@ -166,8 +265,7 @@ public class PBStorageProvider {
 
     /*
     Places the record [key bytes][data bytes] and returns where it went:
-    1. Best fit: the smallest deleted slot whose fullLength fits the record is
-       reused in place (same offset, new length / keyLength).
+    1. A deleted slot offered by takeFreeSlot (best fit) is reused in place.
     2. Otherwise appended to the last page: slot entry at freeSpaceStart, data
        just below freeSpaceEnd.
     3. If the last page is full too, a new page is allocated and used.
@@ -194,32 +292,75 @@ public class PBStorageProvider {
     }
 
     /*
-    Removes and returns the best-fit deleted slot for this record length,
-    or null if no deleted slot is big enough.
+    Hook: a deleted slot whose fullLength fits recordLength, removed from the
+    free list, or null to append instead. The base class keeps no free list
+    (keyless storage never frees single slots); PBKeyStorageProvider does.
+    The returned slot must be deleted and big enough.
     */
-    private RecordID takeFreeSlot(short recordLength) {
-        Map.Entry<Short, Deque<RecordID>> entry = this.freeSlots.ceilingEntry(recordLength);
-        if (entry == null) {
+    protected RecordID takeFreeSlot(short recordLength) throws Exception {
+        return null;
+    }
+
+    /*
+    Hook: called after a slot has been marked deleted, so it can be offered for
+    reuse later.
+    */
+    protected void onSlotFreed(RecordID recordID, Slot slot) throws Exception {
+    }
+
+    protected void markSlotDeleted(RecordID recordID) throws Exception {
+        Page page = this.getPage(recordID.pageNumber);
+        Slot slot = this.getSlot(recordID);
+        if (page == null || slot == null) {
+            return;
+        }
+
+        if (slot.isDeleted()) {
+            return;
+        }
+
+        slot.deletePage(true);
+        this.writeSlotEntry(this.getSlotOffSet(page.getHeader(), recordID.slotNumber), slot);
+        this.onSlotFreed(recordID, slot);
+    }
+
+    protected Slot getSlot(RecordID recordID) throws Exception {
+        Page page = this.getPage(recordID.pageNumber);
+        if (page == null) {
             return null;
         }
 
-        Deque<RecordID> sameSize = entry.getValue();
-        RecordID recordID = sameSize.pollFirst();
-        if (sameSize.isEmpty()) {
-            this.freeSlots.remove(entry.getKey());
+        List<Slot> slots = page.getSlots();
+        if (recordID.slotNumber < 0 || recordID.slotNumber >= slots.size()) {
+            return null;
         }
-        return recordID;
+        return slots.get(recordID.slotNumber);
     }
 
-    private void addFreeSlot(RecordID recordID, Slot slot) {
-        this.freeSlots
-            .computeIfAbsent(slot.getFullLength(), size -> new ArrayDeque<>())
-            .addLast(recordID);
+    /*
+    Data bytes of a slot (the bytes after the key).
+    */
+    protected byte[] readSlot(Slot slot) throws Exception {
+        return this.randomAccessFileService.read(slot.getDataOffset(), slot.getDataLength());
+    }
+
+    /*
+    Key bytes of a slot (the first keyLength bytes at its offset).
+    */
+    protected byte[] readSlotKey(Slot slot) throws Exception {
+        return this.randomAccessFileService.read(slot.getOffset(), slot.getKeyLength());
+    }
+
+    /*
+    The whole record [key bytes][data bytes] of a slot, in one read.
+    */
+    protected byte[] readRecord(Slot slot) throws Exception {
+        return this.randomAccessFileService.read(slot.getOffset(), (int) slot.getLength());
     }
 
     private Page getPageWithSpace(short recordLength) throws Exception {
-        if (!this.pages.isEmpty()) {
-            Page lastPage = this.pages.get(this.pages.size() - 1);
+        if (this.pageCount > 0) {
+            Page lastPage = this.getPage(this.pageCount - 1);
             if (this.hasSpace(lastPage, recordLength)) {
                 return lastPage;
             }
@@ -235,14 +376,15 @@ public class PBStorageProvider {
     }
 
     private Page allocatePage() throws Exception {
-        int pageNumber = this.pages.size();
+        int pageNumber = this.pageCount;
         long pageOffSet = this.getPageOffSet(pageNumber);
 
         PageHeader pageHeader = new PageHeader(pageOffSet);
         Page page = new Page(pageNumber);
         page.setPageHeader(pageHeader);
 
-        this.pages.add(page);
+        this.pageCount++;
+        this.pageCache.put(pageNumber, page);
         this.writePageHeader(pageHeader);
 
         return page;
@@ -271,55 +413,21 @@ public class PBStorageProvider {
         return slotNumber;
     }
 
-    protected void markSlotDeleted(RecordID recordID) throws Exception {
-        Page page = this.getPage(recordID.pageNumber);
-        Slot slot = this.getSlot(recordID);
-        if (page == null || slot == null) {
-            return;
-        }
-
-        if (slot.isDeleted()) {
-            return;
-        }
-
-        slot.deletePage(true);
-        this.writeSlotEntry(this.getSlotOffSet(page.getHeader(), recordID.slotNumber), slot);
-        this.addFreeSlot(recordID, slot);
-    }
-
     private long getSlotOffSet(PageHeader header, short slotNumber) {
         return header.getOffSet() + PBOffSets.HEADER.getValue() + ((long) slotNumber * PBOffSets.SLOT.getValue());
     }
 
-    private Page getPage(int pageNumber) {
-        if (pageNumber < 0 || pageNumber >= this.pages.size()) {
-            return null;
-        }
-        return this.pages.get(pageNumber);
-    }
-
-    protected Slot getSlot(RecordID recordID) {
-        Page page = this.getPage(recordID.pageNumber);
-        if (page == null) {
-            return null;
-        }
-
-        List<Slot> slots = page.getSlots();
-        if (recordID.slotNumber < 0 || recordID.slotNumber >= slots.size()) {
-            return null;
-        }
-        return slots.get(recordID.slotNumber);
-    }
-
     /*
-    Truncates the file back to its header and drops every page and free slot,
-    so nothing old comes back on the next load.
+    Truncates the file back to its header and drops every page, so nothing old
+    comes back on the next load. The file gets a new id: any index built for the
+    old contents no longer matches it and is rebuilt when next opened.
     */
     private void clearAll() throws Exception {
         this.randomAccessFileService.truncate();
+        this.fileId = newFileId();
         this.writeFileHeader();
-        this.pages = new ArrayList<>();
-        this.freeSlots.clear();
+        this.pageCount = 0;
+        this.pageCache.clear();
     }
 
     private void createNewPage(byte[] data) throws Exception {
@@ -336,13 +444,21 @@ public class PBStorageProvider {
         return PBOffSets.FILE_HEADER.getValue() + ((long) pageNumber * PBOffSets.PAGE.getValue());
     }
 
+    private int countPages() throws Exception {
+        long pagesLength = this.randomAccessFileService.length() - PBOffSets.FILE_HEADER.getValue();
+        long pageSize = PBOffSets.PAGE.getValue();
+        return (int) Math.max(0, (pagesLength + pageSize - 1) / pageSize);
+    }
+
     /*
-    A new (empty) file gets an empty header; an existing one has its key type read.
+    A new (empty) file gets a header with a fresh file id; an existing one has
+    its key type and id read. Files written before ids existed get one now.
     */
     private void loadFileHeader() throws Exception {
         long fileLength = this.randomAccessFileService.length();
         if (fileLength == 0) {
             this.storedKeyType = null;
+            this.fileId = newFileId();
             this.writeFileHeader();
             return;
         }
@@ -351,8 +467,23 @@ public class PBStorageProvider {
             throw new IllegalStateException("Corrupt or incompatible storage file: missing file header");
         }
 
-        byte[] header = this.randomAccessFileService.read(0, PBOffSets.FILE_HEADER.getValue());
+        byte[] header = this.randomAccessFileService.read(0, (int) PBOffSets.FILE_HEADER.getValue());
         this.storedKeyType = parseFileHeader(header);
+        this.fileId = ByteBuffer.wrap(header).getLong(FILE_ID_OFFSET);
+
+        if (this.fileId == 0) {
+            this.fileId = newFileId();
+            this.writeFileHeader();
+        }
+    }
+
+    private static long newFileId() {
+        SecureRandom random = new SecureRandom();
+        long id;
+        do {
+            id = random.nextLong();
+        } while (id == 0);
+        return id;
     }
 
     private void writeFileHeader() throws Exception {
@@ -360,16 +491,16 @@ public class PBStorageProvider {
             ? new byte[0]
             : this.storedKeyType.getBytes(StandardCharsets.UTF_8);
 
-        int maxLength = PBOffSets.FILE_HEADER.getValue() - Short.BYTES;
-        if (name.length > maxLength) {
+        if (name.length > MAX_KEY_TYPE_NAME) {
             throw new IllegalArgumentException(
-                "Key type name " + this.storedKeyType + " exceeds " + maxLength + " bytes"
+                "Key type name " + this.storedKeyType + " exceeds " + MAX_KEY_TYPE_NAME + " bytes"
             );
         }
 
         byte[] header = ByteBuffer.allocate(PBOffSets.FILE_HEADER.getValue())
                                   .putShort((short) name.length)
                                   .put(name)
+                                  .putLong(FILE_ID_OFFSET, this.fileId)
                                   .array();
         this.randomAccessFileService.write(0, header);
     }
@@ -380,7 +511,7 @@ public class PBStorageProvider {
         if (length == 0) {
             return null;
         }
-        if (length < 0 || length > header.length - Short.BYTES) {
+        if (length < 0 || length > MAX_KEY_TYPE_NAME) {
             throw new IllegalStateException("Corrupt or incompatible storage file: bad file header");
         }
 
@@ -390,38 +521,12 @@ public class PBStorageProvider {
     }
 
     /*
-    Rebuilds the in-memory pages from the file: every page header, then every
-    slot entry of that page.
+    Reads one page from disk in a single call and rebuilds its header and slots.
     */
-    private void loadPages() throws Exception {
-        long pagesLength = this.randomAccessFileService.length() - PBOffSets.FILE_HEADER.getValue();
-        long pageSize = PBOffSets.PAGE.getValue();
-        int pageCount = (int) ((pagesLength + pageSize - 1) / pageSize);
-
-        for (int pageNumber = 0; pageNumber < pageCount; pageNumber++) {
-            long pageOffSet = this.getPageOffSet(pageNumber);
-            PageHeader header = this.readPageHeader(pageOffSet);
-
-            Page page = new Page(pageNumber);
-            page.setPageHeader(header);
-            
-            for (short slotNumber = 0; slotNumber < header.getSlotCount(); slotNumber++) {
-                Slot slot = this.readSlotEntry(this.getSlotOffSet(header, slotNumber));
-                page.restoreSlot(slot);
-
-                if (slot.isDeleted()) {
-                    this.addFreeSlot(new RecordID(pageNumber, slotNumber), slot);
-                }
-            }
-
-            this.pages.add(page);
-        }
-    }
-
-    private PageHeader readPageHeader(long pageOffSet) throws Exception {
-        ByteBuffer buffer = ByteBuffer.wrap(
-            this.randomAccessFileService.read(pageOffSet, PBOffSets.HEADER.getValue())
-        );
+    private Page loadPage(int pageNumber) throws Exception {
+        long pageOffSet = this.getPageOffSet(pageNumber);
+        int length = (int) Math.min(PBOffSets.PAGE.getValue(), this.randomAccessFileService.length() - pageOffSet);
+        ByteBuffer buffer = ByteBuffer.wrap(this.randomAccessFileService.read(pageOffSet, length));
 
         long offSet = buffer.getLong();
         short slotCount = buffer.getShort();
@@ -435,21 +540,20 @@ public class PBStorageProvider {
             );
         }
 
-        return new PageHeader(offSet, slotCount, freeSpaceStart, freeSpaceEnd, freeBytes);
-    }
+        Page page = new Page(pageNumber);
+        page.setPageHeader(new PageHeader(offSet, slotCount, freeSpaceStart, freeSpaceEnd, freeBytes));
 
-    private Slot readSlotEntry(long entryOffSet) throws Exception {
-        ByteBuffer buffer = ByteBuffer.wrap(
-            this.randomAccessFileService.read(entryOffSet, PBOffSets.SLOT.getValue())
-        );
+        for (int slotNumber = 0; slotNumber < slotCount; slotNumber++) {
+            buffer.position(PBOffSets.HEADER.getValue() + slotNumber * PBOffSets.SLOT.getValue());
+            long slotOffSet = buffer.getLong();
+            short fullLength = buffer.getShort();
+            short slotLength = buffer.getShort();
+            int keyLength = buffer.getInt();
+            boolean deleted = buffer.get() != 0;
+            page.restoreSlot(new Slot(slotOffSet, fullLength, slotLength, keyLength, deleted));
+        }
 
-        long offSet = buffer.getLong();
-        short fullLength = buffer.getShort();
-        short length = buffer.getShort();
-        int keyLength = buffer.getInt();
-        boolean deleted = buffer.get() != 0;
-
-        return new Slot(offSet, fullLength, length, keyLength, deleted);
+        return page;
     }
 
     private void writePageHeader(PageHeader pageHeader) throws Exception {
@@ -498,30 +602,6 @@ public class PBStorageProvider {
             return;
         }
         this.randomAccessFileService.write(offSet, data);
-    }
-
-    private void readPage(Page page, List<byte[]> records) throws Exception {
-        for(Slot slot : page.getSlots()) {
-            if (slot.isDeleted()) {
-                continue;
-            }
-
-            records.add(this.readSlot(slot));
-        }
-    }
-
-    /*
-    Data bytes of a slot (the bytes after the key).
-    */
-    protected byte[] readSlot(Slot slot) throws Exception {
-        return this.randomAccessFileService.read(slot.getDataOffset(), (short) slot.getDataLength());
-    }
-
-    /*
-    Key bytes of a slot (the first keyLength bytes at its offset).
-    */
-    protected byte[] readSlotKey(Slot slot) throws Exception {
-        return this.randomAccessFileService.read(slot.getOffset(), (short) slot.getKeyLength());
     }
 
     /*

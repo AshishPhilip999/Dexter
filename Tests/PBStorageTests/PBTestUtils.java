@@ -1,23 +1,22 @@
 package PBStorageTests;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.nio.file.Path;
 import java.util.Arrays;
 
-import StorageStatus.PB.OperationStatus;
-import StorageStatus.PB.PBStatus;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.PB.PBFail;
+import StorageStatus.PB.PBResult;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.PBOffSets;
 
 /*
 Shared helpers for the PBStorageProvider / PBKeyStorageProvider tests.
 
-PBSuccess values are shared enum constants, so their data is overwritten by the
-next call: always take data out of a status straight away (data(...) /
-dataArray(...)) before calling the storage again.
+Every storage call returns its own PBResult; data(...) / dataArray(...) check
+it succeeded and return its data.
 */
 public final class PBTestUtils {
     public static final int FILE_HEADER = PBOffSets.FILE_HEADER.getValue();
@@ -43,7 +42,18 @@ public final class PBTestUtils {
     }
 
     public static File datFile(String path) {
-        return new File(path + ".pb");
+        return new File(dexFolder(path), "data.pb");
+    }
+
+    /*
+    The storage's .dex folder.
+    */
+    public static File dexFolder(String path) {
+        return new File(path + ".dex");
+    }
+
+    public static File indexFile(String path) {
+        return new File(dexFolder(path), "index.pbi");
     }
 
     public static long fileLength(String path) {
@@ -63,27 +73,26 @@ public final class PBTestUtils {
         return data;
     }
 
-    public static void assertSuccess(PBStatus status) {
-        assertEquals(OperationStatus.SUCCESS, status.getStatus(), "Expected success but was " + status);
+    public static void assertSuccess(PBResult result) {
+        assertTrue(result.hasSucceeded(), "Expected success but was " + result);
     }
 
-    public static void assertFail(PBStatus expected, PBStatus actual) {
-        assertEquals(expected, actual);
-        assertEquals(OperationStatus.FAIL, actual.getStatus());
+    public static void assertFail(PBFail expected, PBResult actual) {
+        assertEquals(expected, actual.getStatus());
+        assertFalse(actual.hasSucceeded());
     }
 
     /*
-    Data of a successful status, copied out before the shared enum is reused.
+    Data of a successful result.
     */
-    public static byte[] data(PBStatus status) {
-        assertTrue(status instanceof PBSuccess, "Expected PBSuccess but was " + status);
-        byte[] data = ((PBSuccess) status).getData();
-        return data == null ? null : data.clone();
+    public static byte[] data(PBResult result) {
+        assertTrue(result.hasSucceeded(), "Expected success but was " + result);
+        return result.getData();
     }
 
-    public static byte[][] dataArray(PBStatus status) {
-        assertTrue(status instanceof PBSuccess, "Expected PBSuccess but was " + status);
-        byte[][] records = ((PBSuccess) status).getDataArray();
-        return records == null ? null : records.clone();
+    public static byte[][] dataArray(PBResult result) {
+        assertTrue(result.hasSucceeded(), "Expected success but was " + result);
+        return result.getDataArray();
     }
+
 }

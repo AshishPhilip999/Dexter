@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBStatus;
+import StorageStatus.PB.PBResult;
 import StorageStatus.PB.PBSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
@@ -24,9 +24,9 @@ public class PBSPWriteTests {
         PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
         byte[] payload = { 1, 2, 3 };
 
-        PBStatus status = sp.write(payload);
+        PBResult status = sp.write(payload);
 
-        assertEquals(PBSuccess.WRITE, status);
+        assertEquals(PBSuccess.WRITE, status.getStatus());
         assertSuccess(status);
         assertArrayEquals(payload, data(status));
         assertNull(dataArray(status));

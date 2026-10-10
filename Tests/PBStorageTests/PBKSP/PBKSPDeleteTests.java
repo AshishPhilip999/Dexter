@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBStatus;
+import StorageStatus.PB.PBResult;
 import StorageStatus.PB.PBSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 
@@ -28,9 +28,9 @@ public class PBKSPDeleteTests {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
 
-        PBStatus status = ksp.delete(1);
+        PBResult status = ksp.delete(1);
 
-        assertEquals(PBSuccess.DELETE, status);
+        assertEquals(PBSuccess.DELETE, status.getStatus());
         assertSuccess(status);
     }
 
@@ -64,7 +64,7 @@ public class PBKSPDeleteTests {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
 
-        assertEquals(PBSuccess.DELETE, ksp.delete(1));
+        assertEquals(PBSuccess.DELETE, ksp.delete(1).getStatus());
         assertFail(PBFail.KEY_NOT_FOUND, ksp.delete(1));
     }
 
@@ -139,7 +139,7 @@ public class PBKSPDeleteTests {
             ksp.write(i, bytes(50, i));
         }
         for (int i = 0; i < 200; i += 2) {
-            assertEquals(PBSuccess.DELETE, ksp.delete(i));
+            assertEquals(PBSuccess.DELETE, ksp.delete(i).getStatus());
         }
 
         PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
@@ -159,12 +159,12 @@ public class PBKSPDeleteTests {
     public void deleteAllReturnsDelete() throws Exception {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
-        assertEquals(PBSuccess.DELETE, ksp.delete());
+        assertEquals(PBSuccess.DELETE, ksp.delete().getStatus());
     }
 
     @Test
     public void deleteAllOnEmptyStorageSucceeds() throws Exception {
-        assertEquals(PBSuccess.DELETE, newStorage().delete());
+        assertEquals(PBSuccess.DELETE, newStorage().delete().getStatus());
     }
 
     @Test

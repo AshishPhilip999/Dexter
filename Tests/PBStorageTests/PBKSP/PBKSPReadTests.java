@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBStatus;
+import StorageStatus.PB.PBResult;
 import StorageStatus.PB.PBSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.Serialization.Serializer;
@@ -31,9 +31,9 @@ public class PBKSPReadTests {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
 
-        PBStatus status = ksp.read(1);
+        PBResult status = ksp.read(1);
 
-        assertEquals(PBSuccess.READ, status);
+        assertEquals(PBSuccess.READ, status.getStatus());
         assertSuccess(status);
         assertArrayEquals(bytes(10, 1), data(status));
         assertNull(dataArray(status));
@@ -127,9 +127,9 @@ public class PBKSPReadTests {
             ksp.write(i, Serializer.serialize("value-" + i));
         }
 
-        PBStatus status = ksp.read();
+        PBResult status = ksp.read();
 
-        assertEquals(PBSuccess.READ, status);
+        assertEquals(PBSuccess.READ, status.getStatus());
         byte[][] records = dataArray(status);
         assertEquals(10, records.length);
 
@@ -158,7 +158,7 @@ public class PBKSPReadTests {
         ksp.write(1, bytes(4, 1));
         ksp.write(2, bytes(4, 2));
 
-        PBStatus status = ksp.read();
+        PBResult status = ksp.read();
         byte[][] records = dataArray(status);
         assertArrayEquals(records[0], data(status));
     }
