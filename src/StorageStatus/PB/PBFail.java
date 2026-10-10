@@ -54,6 +54,13 @@ public enum PBFail implements PBStatus {
     /*
     I/O error while deleting (marking a slot deleted or erasing the file).
     */
-    DELETE_ERROR
+    DELETE_ERROR,
+
+    /*
+    I/O error while compacting. If it happened before the packed file was put
+    in place, the storage is unchanged; after that, the data is complete and a
+    keyed storage's index is rebuilt on the next open.
+    */
+    COMPACT_ERROR
     ;
 }

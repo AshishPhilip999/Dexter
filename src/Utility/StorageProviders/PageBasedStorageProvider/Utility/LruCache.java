@@ -44,6 +44,10 @@ public class LruCache<K, V> {
         this.map.put(key, value);
     }
 
+    public synchronized void remove(K key) {
+        this.map.remove(key);
+    }
+
     public synchronized void clear() {
         this.map.clear();
     }

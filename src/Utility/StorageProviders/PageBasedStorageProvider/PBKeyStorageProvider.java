@@ -31,7 +31,10 @@ disk-based B+ trees:
     free space   (fullLength, page, slot) of every deleted slot, smallest first,
                  so a write can find the best-fitting slot to reuse
 
-Thread safety: as for PBStorageProvider. write / delete / reconstructKeyIndex
+Space: see PBStorageProvider. compact() also rebuilds the index file, which
+otherwise only grows (B+ tree nodes are not merged on delete).
+
+Thread safety: as for PBStorageProvider. write / delete / compact / reconstructKeyIndex
 are exclusive; read / containsKey run in parallel with each other.
 
 Only the pages a call touches are read, through small page caches, so memory
@@ -432,6 +435,23 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     @Override
     protected void onSlotFreed(RecordID recordID, Slot slot) throws Exception {
         this.freeSpace.put(freeSpaceKey(slot.getFullLength(), recordID.pageNumber, recordID.slotNumber), NO_VALUE);
+    }
+
+    /*
+    The slot's page was cut off the end of the file: forget it.
+    */
+    @Override
+    protected void onSlotDropped(RecordID recordID, Slot slot) throws Exception {
+        this.freeSpace.remove(freeSpaceKey(slot.getFullLength(), recordID.pageNumber, recordID.slotNumber));
+    }
+
+    /*
+    compact() moved every record: build a new index (which also packs the index
+    file, since it starts from empty).
+    */
+    @Override
+    protected void onCompacted() throws Exception {
+        this.rebuildIndex();
     }
 
     // ---- helpers --------------------------------------------------------------

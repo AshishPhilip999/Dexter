@@ -2,9 +2,13 @@ package Utility.StorageProviders.PageBasedStorageProvider;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -27,6 +31,12 @@ Thread safety: one instance can be shared by any number of threads. Writes and
 deletes take an exclusive lock; reads share a lock, so they run in parallel
 with each other but never alongside a write. Use one instance per storage:
 two instances (or two programs) on the same .dex folder are not coordinated.
+
+Space: deleting a record only marks its slot deleted; the bytes stay in the
+file until a later write reuses the slot. getDeadBytes() / getFragmentation()
+report how much of the file is wasted this way, and compact() rewrites the file
+without it. Pages at the end of the file that hold only deleted records are cut
+off automatically when their last record is deleted.
 */
 public class PBStorageProvider {
     /*
@@ -47,7 +57,19 @@ public class PBStorageProvider {
     file, so an index file can tell whether it belongs to it.
     */
     private static final int FILE_ID_OFFSET = PBOffSets.FILE_HEADER.getValue() - Long.BYTES;
-    private static final int MAX_KEY_TYPE_NAME = FILE_ID_OFFSET - Short.BYTES;
+
+    /*
+    Just before the file id: the dead byte count (8 bytes), preceded by a marker
+    (4 bytes) saying the count is present. Files written before it existed have
+    zeros there; their count is worked out once, on open.
+
+    File header (256 bytes):
+        keyTypeLength(2) keyTypeName(<= 234) ... marker(4) deadBytes(8) fileId(8)
+    */
+    private static final int DEAD_BYTES_OFFSET = FILE_ID_OFFSET - Long.BYTES;
+    private static final int STATS_MARKER_OFFSET = DEAD_BYTES_OFFSET - Integer.BYTES;
+    private static final int STATS_MARKER = 0x44584431; // "DXD1"
+    private static final int MAX_KEY_TYPE_NAME = STATS_MARKER_OFFSET - Short.BYTES;
 
     /*
     Number of pages in the file. Pages themselves are loaded on demand.
@@ -67,6 +89,13 @@ public class PBStorageProvider {
 
     private long fileId;
 
+    /*
+    Bytes inside pages that hold no live data: the whole fullLength of every
+    deleted slot, plus the unused tail (fullLength - length) of slots reused
+    for a smaller record. Kept in the file header.
+    */
+    private long deadBytes;
+
     private RandomAccessFileService randomAccessFileService;
 
     /*
@@ -84,8 +113,8 @@ public class PBStorageProvider {
         this.folder = DexBundle.open(path);
         this.randomAccessFileService = new RandomAccessFileService(DexBundle.dataPath(this.folder), Extension.PB);
         this.pageCache = new LruCache<>(DEFAULT_CACHE_PAGES);
-        this.loadFileHeader();
         this.pageCount = this.countPages();
+        this.loadFileHeader();
     }
 
     /*
@@ -153,6 +182,83 @@ public class PBStorageProvider {
         }
 
         return PBResult.of(PBFail.NULL_READ);
+    }
+
+    /*
+    Rewrites the data file with only the live records, packed tightly in their
+    current order, so the space of deleted records (getDeadBytes()) is given back
+    and the file shrinks. Keyed storages get a freshly built, compact index too.
+
+    1. The live records are copied into data-compact.pb in the .dex folder, and
+       that file is flushed to disk.
+    2. It is renamed over data.pb in one step: the folder holds either the old
+       file or the new one, never a mix.
+    3. Subclass work (PBKeyStorageProvider rebuilds its index for the new
+       record positions).
+
+    Interrupted before 2, data.pb is untouched and the leftover temp file is
+    deleted on the next open. Interrupted after 2, the new data.pb is complete
+    and has a new file id, so an index that wasn't rebuilt yet no longer
+    matches it and is rebuilt on the next open.
+
+    Takes time proportional to the live data, needs free disk space for one
+    more copy of it, and blocks reads and writes while it runs. Worth calling
+    when getFragmentation() is high, e.g.
+        if (storage.getFragmentation() > 0.5) storage.compact();
+    SUCCESS: PBSuccess.COMPACT
+    FAIL:    COMPACT_ERROR
+    */
+    public PBResult compact() {
+        this.writeLock().lock();
+        try {
+            this.rewriteCompacted();
+            this.onCompacted();
+        } catch (Exception e) {
+            return PBResult.of(PBFail.COMPACT_ERROR);
+        } finally {
+            this.writeLock().unlock();
+        }
+
+        return PBResult.of(PBSuccess.COMPACT);
+    }
+
+    /*
+    Bytes in the file's pages that hold no live data and would be given back
+    by compact(): deleted records, and the unused part of slots reused for a
+    smaller record.
+    */
+    public long getDeadBytes() {
+        this.readLock().lock();
+        try {
+            return this.deadBytes;
+        } finally {
+            this.readLock().unlock();
+        }
+    }
+
+    /*
+    Share of the file's pages that is dead space, from 0.0 (none) to 1.0.
+    */
+    public double getFragmentation() {
+        this.readLock().lock();
+        try {
+            long pagesBytes = (long) this.pageCount * PBOffSets.PAGE.getValue();
+            return pagesBytes == 0 ? 0.0 : (double) this.deadBytes / pagesBytes;
+        } finally {
+            this.readLock().unlock();
+        }
+    }
+
+    /*
+    Current size of the data file in bytes.
+    */
+    public long getFileSize() throws Exception {
+        this.readLock().lock();
+        try {
+            return this.randomAccessFileService.length();
+        } finally {
+            this.readLock().unlock();
+        }
     }
 
     /*
@@ -282,6 +388,7 @@ public class PBStorageProvider {
             slot.reuse(recordLength, keyBytes.length);
             this.writeRecord(slot.getOffset(), keyBytes, data);
             this.writeSlotEntry(this.getSlotOffSet(page.getHeader(), reused.slotNumber), slot);
+            this.addDeadBytes(-recordLength);
 
             return reused;
         }
@@ -308,6 +415,20 @@ public class PBStorageProvider {
     protected void onSlotFreed(RecordID recordID, Slot slot) throws Exception {
     }
 
+    /*
+    Hook: a deleted slot is about to disappear because its page is cut off the
+    end of the file, so it must no longer be offered for reuse.
+    */
+    protected void onSlotDropped(RecordID recordID, Slot slot) throws Exception {
+    }
+
+    /*
+    Hook: compact() has put the packed data file in place; record positions
+    have changed. Runs under the write lock.
+    */
+    protected void onCompacted() throws Exception {
+    }
+
     protected void markSlotDeleted(RecordID recordID) throws Exception {
         Page page = this.getPage(recordID.pageNumber);
         Slot slot = this.getSlot(recordID);
@@ -321,7 +442,224 @@ public class PBStorageProvider {
 
         slot.deletePage(true);
         this.writeSlotEntry(this.getSlotOffSet(page.getHeader(), recordID.slotNumber), slot);
+        this.addDeadBytes(slot.getLength());
         this.onSlotFreed(recordID, slot);
+
+        if (recordID.pageNumber == this.pageCount - 1) {
+            this.trimEmptyTailPages();
+        }
+    }
+
+    /*
+    Cuts pages holding only deleted slots off the end of the file. Called when
+    a slot on the last page is deleted; stops at the first page (from the end)
+    that still has a live record.
+    */
+    private void trimEmptyTailPages() throws Exception {
+        int keep = this.pageCount;
+        long freed = 0;
+
+        while (keep > 0) {
+            Page page = this.getPage(keep - 1);
+            List<Slot> slots = page.getSlots();
+            if (!allDeleted(slots)) {
+                break;
+            }
+
+            for (short slotNumber = 0; slotNumber < slots.size(); slotNumber++) {
+                Slot slot = slots.get(slotNumber);
+                this.onSlotDropped(new RecordID(keep - 1, slotNumber), slot);
+                freed += slot.getFullLength();
+            }
+            keep--;
+        }
+
+        if (keep == this.pageCount) {
+            return;
+        }
+
+        for (int pageNumber = keep; pageNumber < this.pageCount; pageNumber++) {
+            this.pageCache.remove(pageNumber);
+        }
+        this.pageCount = keep;
+        this.addDeadBytes(-freed);
+        this.randomAccessFileService.truncate(getPageOffSet(keep));
+    }
+
+    private static boolean allDeleted(List<Slot> slots) {
+        for (Slot slot : slots) {
+            if (!slot.isDeleted()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void addDeadBytes(long delta) throws Exception {
+        if (delta == 0) {
+            return;
+        }
+        this.deadBytes += delta;
+        this.randomAccessFileService.write(DEAD_BYTES_OFFSET, this.getLongBytes(this.deadBytes));
+    }
+
+    /*
+    Dead bytes worked out from the pages themselves; used once for files
+    written before the count was kept in the header.
+    */
+    private long computeDeadBytes() throws Exception {
+        long dead = 0;
+        for (int pageNumber = 0; pageNumber < this.pageCount; pageNumber++) {
+            for (Slot slot : this.getPage(pageNumber).getSlots()) {
+                dead += slot.isDeleted() ? slot.getFullLength() : slot.getFullLength() - slot.getLength();
+            }
+        }
+        return dead;
+    }
+
+    // ---- compaction -----------------------------------------------------------
+
+    /*
+    Steps 1 and 2 of compact(): writes the packed copy, swaps it in and reopens.
+    */
+    private void rewriteCompacted() throws Exception {
+        Path tempFile = DexBundle.compactFile(this.folder);
+        long newFileId = newFileId();
+
+        try (RandomAccessFileService out = new RandomAccessFileService(DexBundle.compactPath(this.folder), Extension.PB)) {
+            out.truncate();
+            out.write(0, this.fileHeaderBytes(newFileId, 0));
+            this.copyLiveRecords(out);
+            out.force();
+        } catch (Exception e) {
+            Files.deleteIfExists(tempFile);
+            throw e;
+        }
+
+        this.randomAccessFileService.close();
+        try {
+            moveReplacing(tempFile, DexBundle.dataFile(this.folder));
+        } catch (Exception e) {
+            Files.deleteIfExists(tempFile);
+            throw e;
+        } finally {
+            this.reopenDataFile();
+        }
+    }
+
+    /*
+    Copies every live record, in page and slot order, into packed pages of out.
+    Each source page is read in one call and bypasses the page cache.
+    */
+    private void copyLiveRecords(RandomAccessFileService out) throws Exception {
+        PackedPageWriter writer = new PackedPageWriter(out);
+
+        for (int pageNumber = 0; pageNumber < this.pageCount; pageNumber++) {
+            long pageOffSet = getPageOffSet(pageNumber);
+            byte[] raw = this.readRawPage(pageNumber);
+            Page page = parsePage(pageNumber, pageOffSet, raw);
+
+            for (Slot slot : page.getSlots()) {
+                if (!slot.isDeleted()) {
+                    writer.add(raw, (int) (slot.getOffset() - pageOffSet), slot.getLength(), slot.getKeyLength());
+                }
+            }
+        }
+
+        writer.finish();
+    }
+
+    /*
+    Opens data.pb again (after compact() replaced it, or failed to) and drops
+    everything cached from the old file.
+    */
+    private void reopenDataFile() throws Exception {
+        this.randomAccessFileService = new RandomAccessFileService(DexBundle.dataPath(this.folder), Extension.PB);
+        this.pageCache.clear();
+        this.pageCount = this.countPages();
+        this.loadFileHeader();
+    }
+
+    /*
+    Rename in one step where the file system supports it (it does on macOS,
+    Linux and Windows' NTFS); a plain replacing move otherwise.
+    */
+    private static void moveReplacing(Path source, Path target) throws Exception {
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    /*
+    Builds pages in memory, filled the same way placeRecord fills them (slot
+    entries grow up from the header, records grow down from the page end), and
+    writes each one in a single call once it is full. Every slot's fullLength
+    is its record length, so the new file has no dead bytes.
+    */
+    private static final class PackedPageWriter {
+        private static final int PAGE = PBOffSets.PAGE.getValue();
+        private static final int HEADER = PBOffSets.HEADER.getValue();
+        private static final int SLOT = PBOffSets.SLOT.getValue();
+
+        private final RandomAccessFileService out;
+        private final byte[] page = new byte[PAGE];
+
+        private int pageNumber = -1;
+        private short slotCount;
+        private int freeSpaceStart;
+        private int freeSpaceEnd;
+
+        PackedPageWriter(RandomAccessFileService out) {
+            this.out = out;
+        }
+
+        void add(byte[] source, int from, short length, int keyLength) throws Exception {
+            if (this.pageNumber < 0 || this.freeSpaceEnd - this.freeSpaceStart < SLOT + length) {
+                this.finish();
+                this.startPage();
+            }
+
+            long pageOffSet = getPageOffSet(this.pageNumber);
+            this.freeSpaceEnd -= length;
+            System.arraycopy(source, from, this.page, this.freeSpaceEnd, length);
+
+            ByteBuffer.wrap(this.page, this.freeSpaceStart, SLOT)
+                      .putLong(pageOffSet + this.freeSpaceEnd)
+                      .putShort(length)
+                      .putShort(length)
+                      .putInt(keyLength)
+                      .put((byte) 0);
+            this.freeSpaceStart += SLOT;
+            this.slotCount++;
+        }
+
+        /*
+        Writes the page being built, if any.
+        */
+        void finish() throws Exception {
+            if (this.pageNumber < 0) {
+                return;
+            }
+
+            long pageOffSet = getPageOffSet(this.pageNumber);
+            ByteBuffer.wrap(this.page, 0, HEADER)
+                      .putLong(pageOffSet)
+                      .putShort(this.slotCount)
+                      .putLong(pageOffSet + this.freeSpaceStart)
+                      .putLong(pageOffSet + this.freeSpaceEnd)
+                      .putLong(this.freeSpaceEnd - this.freeSpaceStart);
+            this.out.write(pageOffSet, this.page);
+        }
+
+        private void startPage() {
+            this.pageNumber++;
+            Arrays.fill(this.page, (byte) 0);
+            this.slotCount = 0;
+            this.freeSpaceStart = HEADER;
+            this.freeSpaceEnd = PAGE;
+        }
     }
 
     protected Slot getSlot(RecordID recordID) throws Exception {
@@ -377,7 +715,7 @@ public class PBStorageProvider {
 
     private Page allocatePage() throws Exception {
         int pageNumber = this.pageCount;
-        long pageOffSet = this.getPageOffSet(pageNumber);
+        long pageOffSet = getPageOffSet(pageNumber);
 
         PageHeader pageHeader = new PageHeader(pageOffSet);
         Page page = new Page(pageNumber);
@@ -425,6 +763,7 @@ public class PBStorageProvider {
     private void clearAll() throws Exception {
         this.randomAccessFileService.truncate();
         this.fileId = newFileId();
+        this.deadBytes = 0;
         this.writeFileHeader();
         this.pageCount = 0;
         this.pageCache.clear();
@@ -440,7 +779,7 @@ public class PBStorageProvider {
     /*
     Pages sit back to back after the file header.
     */
-    private long getPageOffSet(int pageNumber) {
+    private static long getPageOffSet(int pageNumber) {
         return PBOffSets.FILE_HEADER.getValue() + ((long) pageNumber * PBOffSets.PAGE.getValue());
     }
 
@@ -452,13 +791,15 @@ public class PBStorageProvider {
 
     /*
     A new (empty) file gets a header with a fresh file id; an existing one has
-    its key type and id read. Files written before ids existed get one now.
+    its key type, dead byte count and id read. Files written before ids or the
+    dead byte count existed get them now. pageCount must be set already.
     */
     private void loadFileHeader() throws Exception {
         long fileLength = this.randomAccessFileService.length();
         if (fileLength == 0) {
             this.storedKeyType = null;
             this.fileId = newFileId();
+            this.deadBytes = 0;
             this.writeFileHeader();
             return;
         }
@@ -468,11 +809,23 @@ public class PBStorageProvider {
         }
 
         byte[] header = this.randomAccessFileService.read(0, (int) PBOffSets.FILE_HEADER.getValue());
+        ByteBuffer buffer = ByteBuffer.wrap(header);
         this.storedKeyType = parseFileHeader(header);
-        this.fileId = ByteBuffer.wrap(header).getLong(FILE_ID_OFFSET);
+        this.fileId = buffer.getLong(FILE_ID_OFFSET);
 
+        boolean upgrade = false;
         if (this.fileId == 0) {
             this.fileId = newFileId();
+            upgrade = true;
+        }
+        if (buffer.getInt(STATS_MARKER_OFFSET) == STATS_MARKER) {
+            this.deadBytes = buffer.getLong(DEAD_BYTES_OFFSET);
+        } else {
+            this.deadBytes = this.computeDeadBytes();
+            upgrade = true;
+        }
+
+        if (upgrade) {
             this.writeFileHeader();
         }
     }
@@ -487,6 +840,10 @@ public class PBStorageProvider {
     }
 
     private void writeFileHeader() throws Exception {
+        this.randomAccessFileService.write(0, this.fileHeaderBytes(this.fileId, this.deadBytes));
+    }
+
+    private byte[] fileHeaderBytes(long fileId, long deadBytes) {
         byte[] name = this.storedKeyType == null
             ? new byte[0]
             : this.storedKeyType.getBytes(StandardCharsets.UTF_8);
@@ -497,12 +854,13 @@ public class PBStorageProvider {
             );
         }
 
-        byte[] header = ByteBuffer.allocate(PBOffSets.FILE_HEADER.getValue())
-                                  .putShort((short) name.length)
-                                  .put(name)
-                                  .putLong(FILE_ID_OFFSET, this.fileId)
-                                  .array();
-        this.randomAccessFileService.write(0, header);
+        return ByteBuffer.allocate(PBOffSets.FILE_HEADER.getValue())
+                         .putShort((short) name.length)
+                         .put(name)
+                         .putInt(STATS_MARKER_OFFSET, STATS_MARKER)
+                         .putLong(DEAD_BYTES_OFFSET, deadBytes)
+                         .putLong(FILE_ID_OFFSET, fileId)
+                         .array();
     }
 
     private static String parseFileHeader(byte[] header) {
@@ -524,9 +882,20 @@ public class PBStorageProvider {
     Reads one page from disk in a single call and rebuilds its header and slots.
     */
     private Page loadPage(int pageNumber) throws Exception {
-        long pageOffSet = this.getPageOffSet(pageNumber);
+        return parsePage(pageNumber, getPageOffSet(pageNumber), this.readRawPage(pageNumber));
+    }
+
+    /*
+    The page's bytes as stored (shorter than a page if the file ends early).
+    */
+    private byte[] readRawPage(int pageNumber) throws Exception {
+        long pageOffSet = getPageOffSet(pageNumber);
         int length = (int) Math.min(PBOffSets.PAGE.getValue(), this.randomAccessFileService.length() - pageOffSet);
-        ByteBuffer buffer = ByteBuffer.wrap(this.randomAccessFileService.read(pageOffSet, length));
+        return this.randomAccessFileService.read(pageOffSet, length);
+    }
+
+    private static Page parsePage(int pageNumber, long pageOffSet, byte[] raw) {
+        ByteBuffer buffer = ByteBuffer.wrap(raw);
 
         long offSet = buffer.getLong();
         short slotCount = buffer.getShort();
