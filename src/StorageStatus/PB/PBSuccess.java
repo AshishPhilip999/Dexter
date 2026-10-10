@@ -7,6 +7,7 @@ by these constants.
 public enum PBSuccess implements PBStatus {
     READ,
     WRITE,
-    DELETE
+    DELETE,
+    COMPACT
     ;
 }

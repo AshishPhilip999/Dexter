@@ -12,8 +12,9 @@ A storage lives in one folder with the .dex extension, so it can be copied,
 moved or deleted as a single item:
 
     users.dex/
-        data.pb      records (data pages)
-        index.pbi    key index and free-space index (keyed storage only)
+        data.pb           records (data pages)
+        index.pbi         key index and free-space index (keyed storage only)
+        data-compact.pb   only while compact() runs
 
 The path given to a provider may include ".dex" or not: "data/users" and
 "data/users.dex" both mean the folder data/users.dex. The folder is created if
@@ -25,6 +26,13 @@ to the path) are moved into the folder the first time they are opened.
 public final class DexBundle {
     public static final String DATA_FILE = "data";
     public static final String INDEX_FILE = "index";
+
+    /*
+    compact() writes the packed data file under this name, then renames it over
+    data.pb. One left behind means compact() was interrupted before the rename,
+    so data.pb is still the complete original and the leftover is deleted.
+    */
+    public static final String COMPACT_FILE = "data-compact";
 
     private DexBundle() {
     }
@@ -55,6 +63,8 @@ public final class DexBundle {
             Files.createDirectory(folder);
             migrateLooseFiles(path, folder);
         }
+
+        Files.deleteIfExists(compactFile(folder));
         return folder;
     }
 
@@ -70,6 +80,27 @@ public final class DexBundle {
     */
     public static String indexPath(Path folder) {
         return folder.resolve(INDEX_FILE).toString();
+    }
+
+    /*
+    Path of compact()'s temporary data file without its extension.
+    */
+    public static String compactPath(Path folder) {
+        return folder.resolve(COMPACT_FILE).toString();
+    }
+
+    /*
+    compact()'s temporary data file, users.dex/data-compact.pb.
+    */
+    public static Path compactFile(Path folder) {
+        return folder.resolve(COMPACT_FILE + Extension.PB.getValue());
+    }
+
+    /*
+    The data file, users.dex/data.pb.
+    */
+    public static Path dataFile(Path folder) {
+        return folder.resolve(DATA_FILE + Extension.PB.getValue());
     }
 
     /*

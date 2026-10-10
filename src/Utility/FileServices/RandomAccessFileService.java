@@ -1,13 +1,14 @@
 package Utility.FileServices;
 
 import java.io.EOFException;
+import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 
 import Utility.Constants.Extension;
 
-public class RandomAccessFileService {
+public class RandomAccessFileService implements AutoCloseable {
     private RandomAccessFile randomAccessFile;
 
     /*
@@ -41,6 +42,28 @@ public class RandomAccessFileService {
 
     public void truncate() throws Exception {
         this.randomAccessFile.setLength(0);
+    }
+
+    /*
+    Cuts the file down to length bytes (no-op if it is already shorter).
+    */
+    public void truncate(long length) throws Exception {
+        if (length < this.randomAccessFile.length()) {
+            this.randomAccessFile.setLength(length);
+        }
+    }
+
+    /*
+    Makes sure everything written so far is on the disk, not just in the OS
+    cache (fsync).
+    */
+    public void force() throws Exception {
+        this.channel.force(true);
+    }
+
+    @Override
+    public void close() throws IOException {
+        this.randomAccessFile.close();
     }
 
     /*
