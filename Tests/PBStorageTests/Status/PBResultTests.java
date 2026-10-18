@@ -61,6 +61,26 @@ public class PBResultTests {
     }
 
     @Test
+    public void successesAndPlainFailuresHaveNoError() {
+        assertNull(PBResult.of(PBSuccess.READ, new byte[] { 1 }).getError());
+        assertNull(PBResult.ofAll(PBSuccess.READ, new byte[1][]).getError());
+        assertNull(PBResult.of(PBFail.KEY_NOT_FOUND).getError());
+    }
+
+    @Test
+    public void failureCarriesItsCause() {
+        java.io.IOException cause = new java.io.IOException("No space left on device");
+        PBResult result = PBResult.ofError(PBFail.WRITE_ERROR, cause);
+
+        assertFalse(result.hasSucceeded());
+        assertEquals(PBFail.WRITE_ERROR, result.getStatus());
+        assertSame(cause, result.getError());
+        assertNull(result.getData());
+        assertEquals("WRITE_ERROR (java.io.IOException: No space left on device)", result.toString());
+        assertThrows(IllegalArgumentException.class, () -> PBResult.ofError(null, cause));
+    }
+
+    @Test
     public void statusIsRequired() {
         assertThrows(IllegalArgumentException.class, () -> PBResult.of(null));
         assertThrows(IllegalArgumentException.class, () -> PBResult.of(null, new byte[] { 1 }));

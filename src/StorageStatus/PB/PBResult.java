@@ -10,6 +10,8 @@ handed to another thread.
         byte[] data = result.getData();
     } else if (result.getStatus() == PBFail.KEY_NOT_FOUND) {
         ...
+    } else if (result.getError() != null) {
+        log(result.getError());     // why a READ_ERROR / WRITE_ERROR / ... happened
     }
 
 hasSucceeded() is the overall pass/fail check. getStatus() is the detailed
@@ -38,7 +40,14 @@ public final class PBResult {
     */
     private final byte[][] dataArray;
 
-    private PBResult(PBStatus status, byte[] data, byte[][] dataArray) {
+    /*
+    Failures only: the exception that caused it, e.g. the IOException behind a
+    WRITE_ERROR. null for successes and for failures found by checking the
+    input (NULL_KEY, KEY_NOT_FOUND, DATA_TOO_LARGE, ...).
+    */
+    private final Exception error;
+
+    private PBResult(PBStatus status, byte[] data, byte[][] dataArray, Exception error) {
         if (status == null) {
             throw new IllegalArgumentException("Status cannot be null");
         }
@@ -46,20 +55,21 @@ public final class PBResult {
         this.status = status;
         this.data = data;
         this.dataArray = dataArray;
+        this.error = error;
     }
 
     /*
     A result with no data (failures, DELETE).
     */
     public static PBResult of(PBStatus status) {
-        return new PBResult(status, null, null);
+        return new PBResult(status, null, null, null);
     }
 
     /*
     A result carrying one record (READ) or the written data (WRITE).
     */
     public static PBResult of(PBStatus status, byte[] data) {
-        return new PBResult(status, data, null);
+        return new PBResult(status, data, null, null);
     }
 
     /*
@@ -67,7 +77,16 @@ public final class PBResult {
     */
     public static PBResult ofAll(PBStatus status, byte[][] dataArray) {
         byte[] first = (dataArray != null && dataArray.length > 0) ? dataArray[0] : null;
-        return new PBResult(status, first, dataArray);
+        return new PBResult(status, first, dataArray, null);
+    }
+
+    /*
+    A failure caused by an exception: READ_ERROR, WRITE_ERROR, DELETE_ERROR,
+    COMPACT_ERROR, KEY_ENCODE_ERROR. Takes a PBFail, so a success can never
+    carry an error.
+    */
+    public static PBResult ofError(PBFail status, Exception error) {
+        return new PBResult(status, null, null, error);
     }
 
     /*
@@ -92,8 +111,19 @@ public final class PBResult {
         return this.dataArray;
     }
 
+    /*
+    Why the operation failed, when an exception caused it; null otherwise
+    (including every success). Check getStatus() for what failed.
+    */
+    public Exception getError() {
+        return this.error;
+    }
+
     @Override
     public String toString() {
+        if (this.error != null) {
+            return this.status + " (" + this.error + ")";
+        }
         if (this.dataArray != null) {
             return this.status + " (" + this.dataArray.length + " records)";
         }
