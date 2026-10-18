@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.Serializable;
 import java.nio.file.Path;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -17,6 +18,11 @@ import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 import Utility.Serialization.Serializer;
 
 public class PBSPReadTests {
+    @AfterEach
+    void closeStorages() throws Exception {
+        closeAllStorages();
+    }
+
     @TempDir
     Path dir;
 
@@ -33,20 +39,20 @@ public class PBSPReadTests {
 
     @Test
     public void readOnNewStorageReturnsNullRead() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         assertFail(PBFail.NULL_READ, sp.read());
     }
 
     @Test
     public void readOnReopenedEmptyStorageReturnsNullRead() throws Exception {
         String path = storagePath(dir, "sp");
-        new PBStorageProvider(path);
-        assertFail(PBFail.NULL_READ, new PBStorageProvider(path).read());
+        track(new PBStorageProvider(released(path)));
+        assertFail(PBFail.NULL_READ, track(new PBStorageProvider(released(path))).read());
     }
 
     @Test
     public void readReturnsReadWithWrittenData() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         byte[] payload = bytes(50, 3);
         sp.write(payload);
 
@@ -60,7 +66,7 @@ public class PBSPReadTests {
 
     @Test
     public void readDeserializesBackToObject() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         sp.write(Serializer.serialize(new Person("Ashish", 30)));
 
         Person person = Serializer.deserialize(data(sp.read()));
@@ -71,14 +77,14 @@ public class PBSPReadTests {
     @Test
     public void readAfterReopen() throws Exception {
         String path = storagePath(dir, "sp");
-        new PBStorageProvider(path).write(bytes(20, 4));
+        track(new PBStorageProvider(released(path))).write(bytes(20, 4));
 
-        assertArrayEquals(bytes(20, 4), data(new PBStorageProvider(path).read()));
+        assertArrayEquals(bytes(20, 4), data(track(new PBStorageProvider(released(path))).read()));
     }
 
     @Test
     public void repeatedReadsReturnSameData() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         sp.write(bytes(20, 4));
 
         assertArrayEquals(bytes(20, 4), data(sp.read()));
@@ -87,7 +93,7 @@ public class PBSPReadTests {
 
     @Test
     public void readReturnsLatestOfSeveralWrites() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         sp.write(bytes(10, 1));
         sp.write(bytes(20, 2));
         sp.write(bytes(30, 3));
@@ -98,13 +104,13 @@ public class PBSPReadTests {
     @Test
     public void readMaxRecordSize() throws Exception {
         String path = storagePath(dir, "sp");
-        new PBStorageProvider(path).write(bytes(MAX_RECORD, 8));
-        assertArrayEquals(bytes(MAX_RECORD, 8), data(new PBStorageProvider(path).read()));
+        track(new PBStorageProvider(released(path))).write(bytes(MAX_RECORD, 8));
+        assertArrayEquals(bytes(MAX_RECORD, 8), data(track(new PBStorageProvider(released(path))).read()));
     }
 
     @Test
     public void readAfterDeleteReturnsNullRead() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         sp.write(bytes(10, 1));
         sp.delete();
         assertFail(PBFail.NULL_READ, sp.read());
@@ -113,11 +119,11 @@ public class PBSPReadTests {
     @Test
     public void readOnKeyedFileReturnsFirstLiveRecordWithoutKeyBytes() throws Exception {
         String path = storagePath(dir, "keyed");
-        PBKeyStorageProvider<Integer> keyed = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> keyed = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         keyed.write(1, bytes(10, 1));
         keyed.write(2, bytes(10, 2));
         keyed.delete(1);
 
-        assertArrayEquals(bytes(10, 2), data(new PBStorageProvider(path).read()));
+        assertArrayEquals(bytes(10, 2), data(track(new PBStorageProvider(released(path))).read()));
     }
 }

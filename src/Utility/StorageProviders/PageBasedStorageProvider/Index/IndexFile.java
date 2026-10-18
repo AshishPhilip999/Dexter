@@ -83,6 +83,14 @@ public final class IndexFile {
         this.writeHeader();
     }
 
+    /*
+    Closes the file. The index can't be used afterwards.
+    */
+    public void close() throws java.io.IOException {
+        this.cache.clear();
+        this.file.close();
+    }
+
     int getRoot(int tree) {
         return this.roots[tree];
     }

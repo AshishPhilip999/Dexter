@@ -24,7 +24,26 @@ public class Main {
                 TestObject obj = Serializer.deserialize(data);
 
                 System.out.println(obj.value);
+            } else {
+                System.out.println(result.getError());
             }
+
+            sp.close();
+
+            PBKeyStorageProvider<Integer> sp2 = new PBKeyStorageProvider<>(containerName, Integer.class);
+
+            PBResult result2 = sp2.read(1);
+
+            if (result2.hasSucceeded()) {
+                byte[] data = result2.getData();
+                TestObject obj = Serializer.deserialize(data);
+
+                System.out.println(obj.value);
+            } else {
+                System.out.println(result2.getError());
+            }
+
+            sp2.close();
 
         } catch (Exception e) {
             System.out.println(e);

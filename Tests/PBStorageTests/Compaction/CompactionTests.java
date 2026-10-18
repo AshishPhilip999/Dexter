@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -36,6 +37,11 @@ Dead byte tracking, cutting empty pages off the end of the file, and compact().
 */
 @Timeout(value = 180, unit = TimeUnit.SECONDS)
 public class CompactionTests {
+    @AfterEach
+    void closeStorages() throws Exception {
+        closeAllStorages();
+    }
+
     @TempDir
     Path dir;
 
@@ -50,7 +56,7 @@ public class CompactionTests {
     private static final int FILE_ID_OFFSET = FILE_HEADER - 8;
 
     private PBKeyStorageProvider<Integer> open(String path) throws Exception {
-        return new PBKeyStorageProvider<>(path, Integer.class);
+        return track(new PBKeyStorageProvider<>(released(path), Integer.class));
     }
 
     private static byte[] value(int key, int length) {
@@ -271,7 +277,7 @@ public class CompactionTests {
     @Test
     public void cutPagesLeaveTheCache() throws Exception {
         String path = storagePath(dir, "ksp");
-        Probe ksp = new Probe(path);
+        Probe ksp = track(new Probe(released(path)));
         for (int k = 0; k < RECORDS_PER_PAGE * 4; k++) {
             ksp.write(k, value(k, VALUE_SIZE));
         }
@@ -395,7 +401,7 @@ public class CompactionTests {
     public void compactKeepsTheKeyType() throws Exception {
         String path = storagePath(dir, "ksp");
         withKeys(path, 5).compact();
-        assertThrows(IllegalStateException.class, () -> new PBKeyStorageProvider<>(path, String.class));
+        assertThrows(IllegalStateException.class, () -> track(new PBKeyStorageProvider<>(released(path), String.class)));
     }
 
     @Test
@@ -414,13 +420,13 @@ public class CompactionTests {
     @Test
     public void compactKeylessStorage() throws Exception {
         String path = storagePath(dir, "sp");
-        PBStorageProvider sp = new PBStorageProvider(path);
+        PBStorageProvider sp = track(new PBStorageProvider(released(path)));
         sp.write(bytes(500, 9));
 
         assertSuccess(sp.compact());
 
         assertArrayEquals(bytes(500, 9), data(sp.read()));
-        assertArrayEquals(bytes(500, 9), data(new PBStorageProvider(path).read()));
+        assertArrayEquals(bytes(500, 9), data(track(new PBStorageProvider(released(path))).read()));
         assertEquals(lengthForPages(1), fileLength(path));
     }
 
@@ -452,7 +458,7 @@ public class CompactionTests {
             }
         }
 
-        for (PBKeyStorageProvider<Integer> storage : List.of(ksp, open(path))) {
+        java.util.function.Consumer<PBKeyStorageProvider<Integer>> matchesExpected = storage -> {
             for (int k = 0; k < 300; k++) {
                 if (expected.containsKey(k)) {
                     assertArrayEquals(expected.get(k), data(storage.read(k)), "key " + k);
@@ -460,7 +466,9 @@ public class CompactionTests {
                     assertFail(PBFail.KEY_NOT_FOUND, storage.read(k));
                 }
             }
-        }
+        };
+        matchesExpected.accept(ksp);
+        matchesExpected.accept(open(path));   // and after reopening
     }
 
     @Test
@@ -474,7 +482,7 @@ public class CompactionTests {
             names.add(file.getName());
         }
         names.sort(null);
-        assertEquals(List.of("data.pb", "index.pbi"), names);
+        assertEquals(List.of("data.pb", "dex.lock", "index.pbi"), names);
     }
 
     // ---- interrupted compaction ----------------------------------------------------

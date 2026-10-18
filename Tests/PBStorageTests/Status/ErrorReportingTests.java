@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -27,11 +28,16 @@ causes a real failure (a corrupt page, a damaged index, a blocked temp file)
 and checks the reported cause.
 */
 public class ErrorReportingTests {
+    @AfterEach
+    void closeStorages() throws Exception {
+        closeAllStorages();
+    }
+
     @TempDir
     Path dir;
 
     private PBKeyStorageProvider<Integer> withKeys(String path, int count) throws Exception {
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int k = 0; k < count; k++) {
             assertSuccess(ksp.write(k, bytes(100, k)));
         }
@@ -65,7 +71,7 @@ public class ErrorReportingTests {
         withKeys(path, 10);
         corruptPage(path, 0);
 
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertCause(PBFail.READ_ERROR, IllegalStateException.class, "Corrupt", ksp.read(3));
         assertCause(PBFail.READ_ERROR, IllegalStateException.class, "Corrupt", ksp.read());
     }
@@ -73,10 +79,10 @@ public class ErrorReportingTests {
     @Test
     public void keylessReadOfACorruptPageReportsWhy() throws Exception {
         String path = storagePath(dir, "sp");
-        new PBStorageProvider(path).write(bytes(50, 1));
+        track(new PBStorageProvider(released(path))).write(bytes(50, 1));
         corruptPage(path, 0);
 
-        assertCause(PBFail.READ_ERROR, IllegalStateException.class, "Corrupt", new PBStorageProvider(path).read());
+        assertCause(PBFail.READ_ERROR, IllegalStateException.class, "Corrupt", track(new PBStorageProvider(released(path))).read());
     }
 
     @Test
@@ -85,7 +91,7 @@ public class ErrorReportingTests {
         withKeys(path, 10);
         corruptPage(path, 0);
 
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertCause(PBFail.WRITE_ERROR, IllegalStateException.class, "Corrupt", ksp.write(50, bytes(10, 1)));
     }
 
@@ -95,13 +101,13 @@ public class ErrorReportingTests {
         withKeys(path, 10);
         corruptPage(path, 0);
 
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertCause(PBFail.DELETE_ERROR, IllegalStateException.class, "Corrupt", ksp.delete(4));
     }
 
     @Test
     public void keyThatCannotBeEncodedReportsWhy() throws Exception {
-        PBKeyStorageProvider<BadKey> ksp = new PBKeyStorageProvider<>(storagePath(dir, "bad"), BadKey.class);
+        PBKeyStorageProvider<BadKey> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "bad")), BadKey.class));
 
         PBResult result = ksp.write(new BadKey(), bytes(5, 1));
 
@@ -124,7 +130,7 @@ public class ErrorReportingTests {
         // The old index still says key 2 lives in a slot that is now deleted.
         Files.copy(savedIndex, indexFile(path).toPath(), StandardCopyOption.REPLACE_EXISTING);
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertCause(PBFail.READ_ERROR, IllegalStateException.class, "is deleted", reopened.read(2));
         assertTrue(reopened.read(2).getError().getMessage().contains("reconstructKeyIndex"));
 
@@ -209,6 +215,6 @@ public class ErrorReportingTests {
         assertNull(ksp.write(1, new byte[MAX_RECORD]).getError());
         assertNull(ksp.delete(99).getError());
         assertNull(ksp.compact().getError());
-        assertNull(new PBStorageProvider(storagePath(dir, "empty")).read().getError());
+        assertNull(track(new PBStorageProvider(released(storagePath(dir, "empty")))).read().getError());
     }
 }

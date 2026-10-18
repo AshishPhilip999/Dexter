@@ -61,6 +61,11 @@ public enum PBFail implements PBStatus {
     in place, the storage is unchanged; after that, the data is complete and a
     keyed storage's index is rebuilt on the next open.
     */
-    COMPACT_ERROR
+    COMPACT_ERROR,
+
+    /*
+    The storage was closed with close(); open a new instance to use it again.
+    */
+    STORAGE_CLOSED
     ;
 }

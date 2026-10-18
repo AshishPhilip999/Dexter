@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Set;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -17,11 +18,16 @@ import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.Serialization.Serializer;
 
 public class PBKSPReadTests {
+    @AfterEach
+    void closeStorages() throws Exception {
+        closeAllStorages();
+    }
+
     @TempDir
     Path dir;
 
     private PBKeyStorageProvider<Integer> newStorage() throws Exception {
-        return new PBKeyStorageProvider<>(storagePath(dir, "ksp"), Integer.class);
+        return track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
     }
 
     // ---- read(key) ---------------------------------------------------------
@@ -86,9 +92,9 @@ public class PBKSPReadTests {
     @Test
     public void readKeyAfterReopen() throws Exception {
         String path = storagePath(dir, "ksp");
-        new PBKeyStorageProvider<>(path, Integer.class).write(5, bytes(10, 5));
+        track(new PBKeyStorageProvider<>(released(path), Integer.class)).write(5, bytes(10, 5));
 
-        assertArrayEquals(bytes(10, 5), data(new PBKeyStorageProvider<>(path, Integer.class).read(5)));
+        assertArrayEquals(bytes(10, 5), data(track(new PBKeyStorageProvider<>(released(path), Integer.class)).read(5)));
     }
 
     @Test
@@ -107,7 +113,7 @@ public class PBKSPReadTests {
             ksp.write(key, Serializer.serialize("k" + key));
         }
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(storagePath(dir, "ksp"), Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
         for (int key : keys) {
             assertEquals("k" + key, Serializer.deserialize(data(reopened.read(key))));
         }
@@ -192,14 +198,14 @@ public class PBKSPReadTests {
     @Test
     public void readAllAfterReopen() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 100; i++) {
             ksp.write(i, bytes(50, i));
         }
         ksp.delete(10);
         ksp.write(20, bytes(50, 99));
 
-        assertEquals(99, dataArray(new PBKeyStorageProvider<>(path, Integer.class).read()).length);
+        assertEquals(99, dataArray(track(new PBKeyStorageProvider<>(released(path), Integer.class)).read()).length);
     }
 
     @Test
@@ -240,9 +246,9 @@ public class PBKSPReadTests {
     @Test
     public void containsKeyAfterReopen() throws Exception {
         String path = storagePath(dir, "ksp");
-        new PBKeyStorageProvider<>(path, Integer.class).write(1, bytes(4, 1));
+        track(new PBKeyStorageProvider<>(released(path), Integer.class)).write(1, bytes(4, 1));
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertTrue(reopened.containsKey(1));
         assertFalse(reopened.containsKey(2));
     }

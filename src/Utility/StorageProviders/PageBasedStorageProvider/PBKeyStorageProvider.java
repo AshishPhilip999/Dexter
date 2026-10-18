@@ -79,8 +79,31 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     */
     private final BPlusTree freeSpace;
 
+    /*
+    Throws StorageInUseException if the storage is already open, and
+    IllegalStateException if it holds a different key type. If opening fails,
+    nothing stays locked or open.
+    */
     public PBKeyStorageProvider(String path, Class<K> keyType) throws Exception {
         super(path);
+        try {
+            this.keyType = checkedKeyType(keyType);
+            this.bindStoredKeyType();
+
+            this.indexFile = new IndexFile(DexBundle.indexPath(this.getFolder()), Extension.PBI);
+            this.keyIndex = new BPlusTree(this.indexFile, KEY_INDEX_TREE);
+            this.freeSpace = new BPlusTree(this.indexFile, FREE_SPACE_TREE);
+
+            if (this.indexFile.getDataFileId() != this.getFileId()) {
+                this.reconstructKeyIndex();
+            }
+        } catch (Exception e) {
+            this.closeAfterFailedOpen(e);
+            throw e;
+        }
+    }
+
+    private static Class<?> checkedKeyType(Class<?> keyType) {
         if (keyType == null) {
             throw new IllegalArgumentException("Key type cannot be null");
         }
@@ -91,18 +114,18 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
         etc.: MethodType "() -> int" .wrap() gives "() -> Integer", whose return type
         is the wrapper class.
         */
-        this.keyType = keyType.isPrimitive()
+        return keyType.isPrimitive()
             ? MethodType.methodType(keyType).wrap().returnType()
             : keyType;
+    }
 
-        this.bindStoredKeyType();
-
-        this.indexFile = new IndexFile(DexBundle.indexPath(this.getFolder()), Extension.PBI);
-        this.keyIndex = new BPlusTree(this.indexFile, KEY_INDEX_TREE);
-        this.freeSpace = new BPlusTree(this.indexFile, FREE_SPACE_TREE);
-
-        if (this.indexFile.getDataFileId() != this.getFileId()) {
-            this.reconstructKeyIndex();
+    /*
+    Closes index.pbi; the parent then closes data.pb and releases the lock.
+    */
+    @Override
+    protected void onClose() throws java.io.IOException {
+        if (this.indexFile != null) {
+            this.indexFile.close();
         }
     }
 
@@ -133,6 +156,7 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     public void reconstructKeyIndex() throws Exception {
         this.writeLock().lock();
         try {
+            this.ensureOpen();
             this.rebuildIndex();
         } finally {
             this.writeLock().unlock();
@@ -237,6 +261,9 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
 
         this.writeLock().lock();
         try {
+            if (this.isClosed()) {
+                return PBResult.of(PBFail.STORAGE_CLOSED);
+            }
             RecordID placed = this.placeRecord(keyBytes, data);
             byte[] previous = this.keyIndex.put(keyBytes, encodeRecordID(placed));
 
@@ -270,6 +297,9 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
 
         this.readLock().lock();
         try {
+            if (this.isClosed()) {
+                return PBResult.of(PBFail.STORAGE_CLOSED);
+            }
             byte[] location = this.keyIndex.get(keyBytes);
             if (location == null) {
                 return PBResult.of(PBFail.KEY_NOT_FOUND);
@@ -308,6 +338,9 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
         byte[][] records;
         this.readLock().lock();
         try {
+            if (this.isClosed()) {
+                return PBResult.of(PBFail.STORAGE_CLOSED);
+            }
             records = this.readAllRecords();
         } catch (Exception e) {
             return PBResult.ofError(PBFail.READ_ERROR, e);
@@ -340,6 +373,9 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
 
         this.writeLock().lock();
         try {
+            if (this.isClosed()) {
+                return PBResult.of(PBFail.STORAGE_CLOSED);
+            }
             byte[] location = this.keyIndex.remove(keyBytes);
             if (location == null) {
                 return PBResult.of(PBFail.KEY_NOT_FOUND);
@@ -390,7 +426,7 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
         }
         this.readLock().lock();
         try {
-            return this.keyIndex.get(keyBytes) != null;
+            return !this.isClosed() && this.keyIndex.get(keyBytes) != null;
         } catch (Exception e) {
             return false;
         } finally {
