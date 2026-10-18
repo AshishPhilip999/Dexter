@@ -37,6 +37,10 @@ file until a later write reuses the slot. getDeadBytes() / getFragmentation()
 report how much of the file is wasted this way, and compact() rewrites the file
 without it. Pages at the end of the file that hold only deleted records are cut
 off automatically when their last record is deleted.
+
+Errors: operations never throw. A failure caused by an exception (an I/O error,
+a corrupt page) returns READ_ERROR / WRITE_ERROR / DELETE_ERROR / COMPACT_ERROR
+with that exception in result.getError().
 */
 public class PBStorageProvider {
     /*
@@ -133,7 +137,7 @@ public class PBStorageProvider {
         try {
             this.createNewPage(data);
         } catch (Exception e) {
-            return PBResult.of(PBFail.WRITE_ERROR);
+            return PBResult.ofError(PBFail.WRITE_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
@@ -152,7 +156,7 @@ public class PBStorageProvider {
         try {
             this.clearAll();
         } catch (Exception e) {
-            return PBResult.of(PBFail.DELETE_ERROR);
+            return PBResult.ofError(PBFail.DELETE_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
@@ -176,7 +180,7 @@ public class PBStorageProvider {
                 }
             }
         } catch (Exception e) {
-            return PBResult.of(PBFail.READ_ERROR);
+            return PBResult.ofError(PBFail.READ_ERROR, e);
         } finally {
             this.readLock().unlock();
         }
@@ -214,7 +218,7 @@ public class PBStorageProvider {
             this.rewriteCompacted();
             this.onCompacted();
         } catch (Exception e) {
-            return PBResult.of(PBFail.COMPACT_ERROR);
+            return PBResult.ofError(PBFail.COMPACT_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
@@ -532,7 +536,7 @@ public class PBStorageProvider {
             this.copyLiveRecords(out);
             out.force();
         } catch (Exception e) {
-            Files.deleteIfExists(tempFile);
+            deleteQuietly(tempFile, e);
             throw e;
         }
 
@@ -540,7 +544,7 @@ public class PBStorageProvider {
         try {
             moveReplacing(tempFile, DexBundle.dataFile(this.folder));
         } catch (Exception e) {
-            Files.deleteIfExists(tempFile);
+            deleteQuietly(tempFile, e);
             throw e;
         } finally {
             this.reopenDataFile();
@@ -578,6 +582,19 @@ public class PBStorageProvider {
         this.pageCache.clear();
         this.pageCount = this.countPages();
         this.loadFileHeader();
+    }
+
+    /*
+    Deletes compact()'s temp file after a failure. If that fails too, its
+    exception is attached to the original as suppressed, so the original cause
+    is the one reported.
+    */
+    private static void deleteQuietly(Path file, Exception cause) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (Exception e) {
+            cause.addSuppressed(e);
+        }
     }
 
     /*

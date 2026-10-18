@@ -194,7 +194,7 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
 
             this.resetIndex();
         } catch (Exception e) {
-            return PBResult.of(PBFail.WRITE_ERROR);
+            return PBResult.ofError(PBFail.WRITE_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
@@ -224,7 +224,7 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
         try {
             keyBytes = KeyCodec.encode(key);
         } catch (Exception e) {
-            return PBResult.of(PBFail.KEY_ENCODE_ERROR);
+            return PBResult.ofError(PBFail.KEY_ENCODE_ERROR, e);
         }
         if (keyBytes.length > MAX_KEY_BYTES) {
             return PBResult.of(PBFail.KEY_TOO_LARGE);
@@ -244,7 +244,7 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
                 this.markSlotDeleted(decodeRecordID(previous));
             }
         } catch (Exception e) {
-            return PBResult.of(PBFail.WRITE_ERROR);
+            return PBResult.ofError(PBFail.WRITE_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
@@ -275,18 +275,22 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
                 return PBResult.of(PBFail.KEY_NOT_FOUND);
             }
 
-            Slot slot = this.getSlot(decodeRecordID(location));
+            RecordID recordID = decodeRecordID(location);
+            Slot slot = this.getSlot(recordID);
             if (slot == null || slot.isDeleted() || slot.getKeyLength() != keyBytes.length) {
-                return PBResult.of(PBFail.READ_ERROR);
+                String problem = slot == null ? "does not exist"
+                    : slot.isDeleted() ? "is deleted"
+                    : "holds a key of " + slot.getKeyLength() + " bytes, not " + keyBytes.length;
+                return PBResult.ofError(PBFail.READ_ERROR, damagedIndex(recordID, problem));
             }
 
             byte[] record = this.readRecord(slot);
             if (!Arrays.equals(record, 0, keyBytes.length, keyBytes, 0, keyBytes.length)) {
-                return PBResult.of(PBFail.READ_ERROR);
+                return PBResult.ofError(PBFail.READ_ERROR, damagedIndex(recordID, "holds a different key"));
             }
             return PBResult.of(PBSuccess.READ, Arrays.copyOfRange(record, keyBytes.length, record.length));
         } catch (Exception e) {
-            return PBResult.of(PBFail.READ_ERROR);
+            return PBResult.ofError(PBFail.READ_ERROR, e);
         } finally {
             this.readLock().unlock();
         }
@@ -306,7 +310,7 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
         try {
             records = this.readAllRecords();
         } catch (Exception e) {
-            return PBResult.of(PBFail.READ_ERROR);
+            return PBResult.ofError(PBFail.READ_ERROR, e);
         } finally {
             this.readLock().unlock();
         }
@@ -342,7 +346,7 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
             }
             this.markSlotDeleted(decodeRecordID(location));
         } catch (Exception e) {
-            return PBResult.of(PBFail.DELETE_ERROR);
+            return PBResult.ofError(PBFail.DELETE_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
@@ -366,7 +370,7 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
 
             this.resetIndex();
         } catch (Exception e) {
-            return PBResult.of(PBFail.DELETE_ERROR);
+            return PBResult.ofError(PBFail.DELETE_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
@@ -455,6 +459,16 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     }
 
     // ---- helpers --------------------------------------------------------------
+
+    /*
+    The error for a key index entry that doesn't match the data file.
+    */
+    private static IllegalStateException damagedIndex(RecordID recordID, String problem) {
+        return new IllegalStateException(
+            "Damaged index: the key's entry points at page " + recordID.pageNumber + " slot "
+            + recordID.slotNumber + ", which " + problem + ". Call reconstructKeyIndex() to repair it."
+        );
+    }
 
     /*
     Empty index for the (just erased) data file, tagged with its new id.
