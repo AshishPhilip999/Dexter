@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.file.Path;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -15,12 +16,17 @@ import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 
 public class PBSPDeleteTests {
+    @AfterEach
+    void closeStorages() throws Exception {
+        closeAllStorages();
+    }
+
     @TempDir
     Path dir;
 
     @Test
     public void deleteReturnsDelete() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         sp.write(bytes(10, 1));
 
         PBResult status = sp.delete();
@@ -31,13 +37,13 @@ public class PBSPDeleteTests {
 
     @Test
     public void deleteOnEmptyStorageSucceeds() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         assertEquals(PBSuccess.DELETE, sp.delete().getStatus());
     }
 
     @Test
     public void deleteTwiceSucceeds() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         sp.write(bytes(10, 1));
 
         assertEquals(PBSuccess.DELETE, sp.delete().getStatus());
@@ -47,7 +53,7 @@ public class PBSPDeleteTests {
 
     @Test
     public void deleteRemovesData() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         sp.write(bytes(10, 1));
         sp.delete();
 
@@ -57,7 +63,7 @@ public class PBSPDeleteTests {
     @Test
     public void deleteTruncatesFileToHeader() throws Exception {
         String path = storagePath(dir, "sp");
-        PBStorageProvider sp = new PBStorageProvider(path);
+        PBStorageProvider sp = track(new PBStorageProvider(released(path)));
         sp.write(bytes(MAX_RECORD, 1));
         sp.delete();
 
@@ -67,38 +73,38 @@ public class PBSPDeleteTests {
     @Test
     public void deletePersistsAcrossReopen() throws Exception {
         String path = storagePath(dir, "sp");
-        PBStorageProvider sp = new PBStorageProvider(path);
+        PBStorageProvider sp = track(new PBStorageProvider(released(path)));
         sp.write(bytes(10, 1));
         sp.delete();
 
-        assertFail(PBFail.NULL_READ, new PBStorageProvider(path).read());
+        assertFail(PBFail.NULL_READ, track(new PBStorageProvider(released(path))).read());
     }
 
     @Test
     public void writeAfterDeleteAndReopen() throws Exception {
         String path = storagePath(dir, "sp");
-        PBStorageProvider sp = new PBStorageProvider(path);
+        PBStorageProvider sp = track(new PBStorageProvider(released(path)));
         sp.write(bytes(10, 1));
         sp.delete();
 
-        PBStorageProvider reopened = new PBStorageProvider(path);
+        PBStorageProvider reopened = track(new PBStorageProvider(released(path)));
         assertSuccess(reopened.write(bytes(10, 2)));
-        assertArrayEquals(bytes(10, 2), data(new PBStorageProvider(path).read()));
+        assertArrayEquals(bytes(10, 2), data(track(new PBStorageProvider(released(path))).read()));
     }
 
     @Test
     public void deleteOnKeyedFileRemovesRecordsButKeepsKeyType() throws Exception {
         String path = storagePath(dir, "keyed");
-        PBKeyStorageProvider<Integer> keyed = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> keyed = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 5; i++) {
             keyed.write(i, bytes(10, i));
         }
 
-        assertEquals(PBSuccess.DELETE, new PBStorageProvider(path).delete().getStatus());
+        assertEquals(PBSuccess.DELETE, track(new PBStorageProvider(released(path))).delete().getStatus());
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertFail(PBFail.NULL_READ, reopened.read());
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(0));
-        assertThrows(IllegalStateException.class, () -> new PBKeyStorageProvider<>(path, String.class));
+        assertThrows(IllegalStateException.class, () -> track(new PBKeyStorageProvider<>(released(path), String.class)));
     }
 }

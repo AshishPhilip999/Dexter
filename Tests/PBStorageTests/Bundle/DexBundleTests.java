@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.stream.Stream;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -22,6 +23,11 @@ Storage lives in a single .dex folder holding data.pb (and index.pbi for keyed
 storage).
 */
 public class DexBundleTests {
+    @AfterEach
+    void closeStorages() throws Exception {
+        closeAllStorages();
+    }
+
     @TempDir
     Path dir;
 
@@ -44,26 +50,26 @@ public class DexBundleTests {
     @Test
     public void keyedStorageIsOneDexFolderWithDataAndIndex() throws Exception {
         String path = storagePath(dir, "users");
-        new PBKeyStorageProvider<>(path, Integer.class).write(1, bytes(10, 1));
+        track(new PBKeyStorageProvider<>(released(path), Integer.class)).write(1, bytes(10, 1));
 
         assertTrue(dexFolder(path).isDirectory());
-        assertArrayEquals(new String[] { "data.pb", "index.pbi" }, namesIn(dexFolder(path)));
+        assertArrayEquals(new String[] { "data.pb", "dex.lock", "index.pbi" }, namesIn(dexFolder(path)));
         assertArrayEquals(new String[] { "users.dex" }, namesIn(dir.toFile()), "nothing else is created beside it");
     }
 
     @Test
     public void keylessStorageIsOneDexFolderWithData() throws Exception {
         String path = storagePath(dir, "settings");
-        new PBStorageProvider(path).write(bytes(10, 1));
+        track(new PBStorageProvider(released(path))).write(bytes(10, 1));
 
-        assertArrayEquals(new String[] { "data.pb" }, namesIn(dexFolder(path)));
+        assertArrayEquals(new String[] { "data.pb", "dex.lock" }, namesIn(dexFolder(path)));
         assertArrayEquals(new String[] { "settings.dex" }, namesIn(dir.toFile()));
     }
 
     @Test
     public void getFolderReturnsTheDexFolder() throws Exception {
         String path = storagePath(dir, "users");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertEquals(dexFolder(path).toPath(), ksp.getFolder());
     }
 
@@ -72,17 +78,17 @@ public class DexBundleTests {
     @Test
     public void pathWithOrWithoutDexOpensTheSameStorage() throws Exception {
         String plain = storagePath(dir, "users");
-        new PBKeyStorageProvider<>(plain, Integer.class).write(1, bytes(10, 7));
+        track(new PBKeyStorageProvider<>(released(plain), Integer.class)).write(1, bytes(10, 7));
 
-        PBKeyStorageProvider<Integer> viaDex = new PBKeyStorageProvider<>(plain + ".dex", Integer.class);
+        PBKeyStorageProvider<Integer> viaDex = track(new PBKeyStorageProvider<>(released(plain + ".dex"), Integer.class));
         assertArrayEquals(bytes(10, 7), data(viaDex.read(1)));
         assertArrayEquals(new String[] { "users.dex" }, namesIn(dir.toFile()), "no users.dex.dex is created");
     }
 
     @Test
     public void emptyOrNullPathIsRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new PBStorageProvider(""));
-        assertThrows(IllegalArgumentException.class, () -> new PBStorageProvider(null));
+        assertThrows(IllegalArgumentException.class, () -> track(new PBStorageProvider(released(""))));
+        assertThrows(IllegalArgumentException.class, () -> track(new PBStorageProvider(released(null))));
     }
 
     // ---- moving and copying the folder --------------------------------------
@@ -90,16 +96,17 @@ public class DexBundleTests {
     @Test
     public void movedFolderOpensWithAllData() throws Exception {
         String path = storagePath(dir, "users");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 1_000; i++) {
             ksp.write(i, bytes(10, i));
         }
         ksp.delete(5);
 
+        released(path);   // close before moving the folder
         Path moved = Files.createDirectory(dir.resolve("elsewhere")).resolve("renamed.dex");
         Files.move(dexFolder(path).toPath(), moved);
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(moved.toString(), Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(moved.toString()), Integer.class));
         assertArrayEquals(bytes(10, 999), data(reopened.read(999)));
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(5));
         assertEquals(999, dataArray(reopened.read()).length);
@@ -108,31 +115,31 @@ public class DexBundleTests {
     @Test
     public void copiedFolderIsAnIndependentStorage() throws Exception {
         String original = storagePath(dir, "users");
-        new PBKeyStorageProvider<>(original, Integer.class).write(1, bytes(10, 1));
+        track(new PBKeyStorageProvider<>(released(original), Integer.class)).write(1, bytes(10, 1));
 
         String copy = storagePath(dir, "copy");
         copyFolder(dexFolder(original).toPath(), dexFolder(copy).toPath());
 
-        PBKeyStorageProvider<Integer> copied = new PBKeyStorageProvider<>(copy, Integer.class);
+        PBKeyStorageProvider<Integer> copied = track(new PBKeyStorageProvider<>(released(copy), Integer.class));
         copied.write(1, bytes(10, 2));
         copied.write(2, bytes(10, 3));
 
-        PBKeyStorageProvider<Integer> untouched = new PBKeyStorageProvider<>(original, Integer.class);
+        PBKeyStorageProvider<Integer> untouched = track(new PBKeyStorageProvider<>(released(original), Integer.class));
         assertArrayEquals(bytes(10, 1), data(untouched.read(1)));
         assertFail(PBFail.KEY_NOT_FOUND, untouched.read(2));
-        assertArrayEquals(bytes(10, 2), data(new PBKeyStorageProvider<>(copy, Integer.class).read(1)));
+        assertArrayEquals(bytes(10, 2), data(track(new PBKeyStorageProvider<>(released(copy), Integer.class)).read(1)));
     }
 
     @Test
     public void deletingTheFolderRemovesTheStorage() throws Exception {
         String path = storagePath(dir, "users");
-        new PBKeyStorageProvider<>(path, Integer.class).write(1, bytes(10, 1));
+        track(new PBKeyStorageProvider<>(released(path), Integer.class)).write(1, bytes(10, 1));
 
         try (Stream<Path> files = Files.walk(dexFolder(path).toPath())) {
             files.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
         }
 
-        PBKeyStorageProvider<Integer> fresh = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> fresh = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertFail(PBFail.NULL_READ, fresh.read());
     }
 
@@ -144,11 +151,12 @@ public class DexBundleTests {
     */
     private String makeLooseLayout(boolean withIndex) throws Exception {
         String path = storagePath(dir, "legacy");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 500; i++) {
             ksp.write(i, bytes(10, i));
         }
         ksp.delete(7);
+        released(path);
 
         Files.move(datFile(path).toPath(), Path.of(path + ".pb"));
         if (withIndex) {
@@ -156,6 +164,7 @@ public class DexBundleTests {
         } else {
             Files.delete(indexFile(path).toPath());
         }
+        Files.delete(new File(dexFolder(path), "dex.lock").toPath());
         Files.delete(dexFolder(path).toPath());
         return path;
     }
@@ -164,10 +173,10 @@ public class DexBundleTests {
     public void looseDataAndIndexFilesAreMovedIntoTheFolder() throws Exception {
         String path = makeLooseLayout(true);
 
-        PBKeyStorageProvider<Integer> opened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> opened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
 
         assertArrayEquals(new String[] { "legacy.dex" }, namesIn(dir.toFile()), "loose files moved, none left behind");
-        assertArrayEquals(new String[] { "data.pb", "index.pbi" }, namesIn(dexFolder(path)));
+        assertArrayEquals(new String[] { "data.pb", "dex.lock", "index.pbi" }, namesIn(dexFolder(path)));
         assertArrayEquals(bytes(10, 499), data(opened.read(499)));
         assertFail(PBFail.KEY_NOT_FOUND, opened.read(7));
     }
@@ -176,9 +185,9 @@ public class DexBundleTests {
     public void looseDataFileWithoutIndexIsMovedAndIndexed() throws Exception {
         String path = makeLooseLayout(false);
 
-        PBKeyStorageProvider<Integer> opened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> opened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
 
-        assertArrayEquals(new String[] { "data.pb", "index.pbi" }, namesIn(dexFolder(path)));
+        assertArrayEquals(new String[] { "data.pb", "dex.lock", "index.pbi" }, namesIn(dexFolder(path)));
         assertArrayEquals(bytes(10, 250), data(opened.read(250)));
         assertEquals(499, dataArray(opened.read()).length);
     }
@@ -186,10 +195,10 @@ public class DexBundleTests {
     @Test
     public void looseFilesAreLeftAloneWhenTheFolderAlreadyExists() throws Exception {
         String path = storagePath(dir, "users");
-        new PBKeyStorageProvider<>(path, Integer.class).write(1, bytes(10, 1));
+        track(new PBKeyStorageProvider<>(released(path), Integer.class)).write(1, bytes(10, 1));
         Files.write(Path.of(path + ".pb"), new byte[] { 1, 2, 3 });
 
-        PBKeyStorageProvider<Integer> opened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> opened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
 
         assertArrayEquals(bytes(10, 1), data(opened.read(1)), "the .dex folder wins");
         assertTrue(new File(path + ".pb").isFile(), "the stray file isn't touched");
@@ -202,14 +211,14 @@ public class DexBundleTests {
         String path = storagePath(dir, "users");
         Files.write(Path.of(path + ".dex"), new byte[] { 1 });
 
-        assertThrows(java.io.IOException.class, () -> new PBKeyStorageProvider<>(path, Integer.class));
+        assertThrows(java.io.IOException.class, () -> track(new PBKeyStorageProvider<>(released(path), Integer.class)));
     }
 
     @Test
     public void missingParentFolderIsRejected() {
         String path = dir.resolve("no-such-folder").resolve("users").toString();
 
-        assertThrows(java.io.IOException.class, () -> new PBStorageProvider(path));
+        assertThrows(java.io.IOException.class, () -> track(new PBStorageProvider(released(path))));
         assertFalse(new File(dir.toFile(), "no-such-folder").exists(), "parent folders are not created");
     }
 }

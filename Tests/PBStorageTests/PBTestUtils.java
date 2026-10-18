@@ -6,10 +6,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 import StorageStatus.PB.PBFail;
 import StorageStatus.PB.PBResult;
+import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
+import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexBundle;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.PBOffSets;
 
 /*
@@ -35,6 +41,53 @@ public final class PBTestUtils {
     public static final int INT_KEY_BYTES = 5;
 
     private PBTestUtils() {
+    }
+
+    // ---- open instances ------------------------------------------------------------
+    //
+    // Only one instance may have a storage open. Tests that "reopen" a storage
+    // (to check what was persisted) open it as
+    //     track(new PBKeyStorageProvider<>(released(path), Integer.class))
+    // released(path) closes the instance this test opened before for that path,
+    // as if the earlier program had exited; track(...) remembers the new one.
+    // closeAllStorages() runs after each test.
+
+    private static final Map<Path, PBStorageProvider> OPEN = new LinkedHashMap<>();
+
+    private static Path key(String path) {
+        return DexBundle.folderOf(path).toAbsolutePath().normalize();
+    }
+
+    /*
+    Closes the tracked instance for path, if any, and returns path.
+    */
+    public static String released(String path) throws Exception {
+        PBStorageProvider previous;
+        synchronized (OPEN) {
+            previous = OPEN.remove(key(path));
+        }
+        if (previous != null) {
+            previous.close();
+        }
+        return path;
+    }
+
+    public static <T extends PBStorageProvider> T track(T storage) {
+        synchronized (OPEN) {
+            OPEN.put(storage.getFolder().toAbsolutePath().normalize(), storage);
+        }
+        return storage;
+    }
+
+    public static void closeAllStorages() throws Exception {
+        List<PBStorageProvider> all;
+        synchronized (OPEN) {
+            all = new ArrayList<>(OPEN.values());
+            OPEN.clear();
+        }
+        for (PBStorageProvider storage : all) {
+            storage.close();
+        }
     }
 
     public static String storagePath(Path dir, String name) {

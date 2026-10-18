@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -27,6 +28,11 @@ The disk-based index (.pbi): lazy loading, bounded memory, rebuilding, and
 staying consistent with the data file.
 */
 public class PBKSPIndexTests {
+    @AfterEach
+    void closeStorages() throws Exception {
+        closeAllStorages();
+    }
+
     @TempDir
     Path dir;
 
@@ -56,7 +62,7 @@ public class PBKSPIndexTests {
         (PAGE - PAGE_HEADER) / (SLOT_ENTRY + INT_KEY_BYTES + VALUE_SIZE);
 
     private PBKeyStorageProvider<Integer> fillOnePage(String path) throws Exception {
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < RECORDS_PER_PAGE; i++) {
             assertSuccess(ksp.write(i, bytes(VALUE_SIZE, i)));
         }
@@ -69,7 +75,7 @@ public class PBKSPIndexTests {
     @Test
     public void indexFileIsCreatedNextToDataFile() throws Exception {
         String path = storagePath(dir, "ksp");
-        new PBKeyStorageProvider<>(path, Integer.class).write(1, bytes(5, 1));
+        track(new PBKeyStorageProvider<>(released(path), Integer.class)).write(1, bytes(5, 1));
 
         assertTrue(datFile(path).isFile());
         assertTrue(indexFile(path).isFile());
@@ -78,13 +84,13 @@ public class PBKSPIndexTests {
     @Test
     public void openingLoadsNoPagesAndMemoryStaysBounded() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> writer = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> writer = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         int count = 100_000;
         for (int i = 0; i < count; i++) {
             writer.write(i, bytes(VALUE_SIZE, i));
         }
 
-        Probe<Integer> reopened = new Probe<>(path, Integer.class);
+        Probe<Integer> reopened = track(new Probe<>(released(path), Integer.class));
         assertTrue(reopened.pages() > PBStorageProvider.DEFAULT_CACHE_PAGES, "precondition: more pages than the cache holds");
         assertEquals(0, reopened.cachedDataPages(), "opening reads no data pages");
         assertEquals(0, reopened.cachedIndexPages(), "opening reads no index pages");
@@ -104,7 +110,7 @@ public class PBKSPIndexTests {
     @Test
     public void missingIndexFileIsRebuiltOnOpen() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 2_000; i++) {
             ksp.write(i, bytes(20, i));
         }
@@ -113,7 +119,7 @@ public class PBKSPIndexTests {
 
         Files.delete(indexFile(path).toPath());
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertTrue(indexFile(path).isFile());
         assertArrayEquals(bytes(30, 99), data(reopened.read(5)));
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(6));
@@ -128,7 +134,7 @@ public class PBKSPIndexTests {
         ksp.delete(0);
         Files.delete(indexFile(path).toPath());
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertSuccess(reopened.write(1_000, bytes(VALUE_SIZE, 5)));
 
         assertEquals(lengthForPages(1), fileLength(path), "the deleted slot was reused, no new page");
@@ -138,8 +144,8 @@ public class PBKSPIndexTests {
     public void indexBelongingToAnotherDataFileIsRebuilt() throws Exception {
         String a = storagePath(dir, "a");
         String b = storagePath(dir, "b");
-        PBKeyStorageProvider<Integer> storeA = new PBKeyStorageProvider<>(a, Integer.class);
-        PBKeyStorageProvider<Integer> storeB = new PBKeyStorageProvider<>(b, Integer.class);
+        PBKeyStorageProvider<Integer> storeA = track(new PBKeyStorageProvider<>(released(a), Integer.class));
+        PBKeyStorageProvider<Integer> storeB = track(new PBKeyStorageProvider<>(released(b), Integer.class));
         for (int i = 0; i < 500; i++) {
             storeA.write(i, bytes(10, 1));
             storeB.write(i * 2, bytes(10, 2));
@@ -147,7 +153,7 @@ public class PBKSPIndexTests {
 
         Files.copy(indexFile(a).toPath(), indexFile(b).toPath(), StandardCopyOption.REPLACE_EXISTING);
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(b, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(b), Integer.class));
         assertArrayEquals(bytes(10, 2), data(reopened.read(4)));
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
     }
@@ -155,7 +161,7 @@ public class PBKSPIndexTests {
     @Test
     public void olderFileWithoutFileIdOrIndexOpens() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 300; i++) {
             ksp.write(i, bytes(10, i));
         }
@@ -167,7 +173,7 @@ public class PBKSPIndexTests {
         }
         Files.delete(indexFile(path).toPath());
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 300; i++) {
             assertArrayEquals(bytes(10, i), data(reopened.read(i)));
         }
@@ -180,7 +186,7 @@ public class PBKSPIndexTests {
     @Test
     public void reconstructKeyIndexKeepsEverythingReadable() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 1_000; i++) {
             ksp.write(i, bytes(10, i));
         }
@@ -191,13 +197,13 @@ public class PBKSPIndexTests {
         assertArrayEquals(bytes(10, 499), data(ksp.read(499)));
         assertFail(PBFail.KEY_NOT_FOUND, ksp.read(500));
         assertSuccess(ksp.write(2_000, bytes(10, 7)));
-        assertArrayEquals(bytes(10, 7), data(new PBKeyStorageProvider<>(path, Integer.class).read(2_000)));
+        assertArrayEquals(bytes(10, 7), data(track(new PBKeyStorageProvider<>(released(path), Integer.class)).read(2_000)));
     }
 
     @Test
     public void rebuildKeepsOneRecordWhenAKeyWasLeftLiveTwice() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         ksp.write(1, bytes(10, 1));   // page 0, slot 0
         ksp.write(1, bytes(10, 2));   // page 0, slot 1; slot 0 marked deleted
 
@@ -209,7 +215,7 @@ public class PBKSPIndexTests {
         }
         Files.delete(indexFile(path).toPath());
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertArrayEquals(bytes(10, 2), data(reopened.read(1)), "the later record wins");
         assertEquals(1, dataArray(reopened.read()).length, "the duplicate was marked deleted");
     }
@@ -219,14 +225,14 @@ public class PBKSPIndexTests {
     @Test
     public void keylessWriteThroughPlainProviderInvalidatesIndex() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 100; i++) {
             ksp.write(i, bytes(10, i));
         }
 
-        new PBStorageProvider(path).write(bytes(3, 9));
+        track(new PBStorageProvider(released(path))).write(bytes(3, 9));
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(0));
         assertSuccess(reopened.write(0, bytes(10, 5)));
         assertArrayEquals(bytes(10, 5), data(reopened.read(0)));
@@ -236,14 +242,14 @@ public class PBKSPIndexTests {
     @Test
     public void deleteAllThroughPlainProviderInvalidatesIndex() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 100; i++) {
             ksp.write(i, bytes(10, i));
         }
 
-        new PBStorageProvider(path).delete();
+        track(new PBStorageProvider(released(path))).delete();
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(50));
         assertFail(PBFail.NULL_READ, reopened.read());
     }
@@ -251,7 +257,7 @@ public class PBKSPIndexTests {
     @Test
     public void deleteAllEmptiesTheIndexFile() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 10_000; i++) {
             ksp.write(i, bytes(10, i));
         }
@@ -260,7 +266,7 @@ public class PBKSPIndexTests {
         ksp.delete();
 
         assertTrue(indexFile(path).length() < before);
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
         assertSuccess(reopened.write(1, bytes(10, 1)));
     }
@@ -270,12 +276,12 @@ public class PBKSPIndexTests {
     @Test
     public void keyAtTheIndexLimitWorksAndOneByteMoreIsRejected() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<String> ksp = new PBKeyStorageProvider<>(path, String.class);
+        PBKeyStorageProvider<String> ksp = track(new PBKeyStorageProvider<>(released(path), String.class));
         String atLimit = "k".repeat(PBKeyStorageProvider.MAX_KEY_BYTES - 1);   // + 1 tag byte
         String overLimit = atLimit + "k";
 
         assertSuccess(ksp.write(atLimit, bytes(10, 1)));
-        assertArrayEquals(bytes(10, 1), data(new PBKeyStorageProvider<>(path, String.class).read(atLimit)));
+        assertArrayEquals(bytes(10, 1), data(track(new PBKeyStorageProvider<>(released(path), String.class)).read(atLimit)));
 
         assertFail(PBFail.KEY_TOO_LARGE, ksp.write(overLimit, bytes(10, 1)));
         assertFail(PBFail.KEY_NOT_FOUND, ksp.read(overLimit));
@@ -286,7 +292,7 @@ public class PBKSPIndexTests {
     @Test
     public void manyLongStringKeys() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<String> ksp = new PBKeyStorageProvider<>(path, String.class);
+        PBKeyStorageProvider<String> ksp = track(new PBKeyStorageProvider<>(released(path), String.class));
         Random random = new Random(3);
         List<String> keys = new ArrayList<>();
         for (int i = 0; i < 2_000; i++) {
@@ -299,7 +305,7 @@ public class PBKSPIndexTests {
             assertSuccess(ksp.write(key, bytes(10, i)));
         }
 
-        PBKeyStorageProvider<String> reopened = new PBKeyStorageProvider<>(path, String.class);
+        PBKeyStorageProvider<String> reopened = track(new PBKeyStorageProvider<>(released(path), String.class));
         for (int i = 0; i < keys.size(); i++) {
             assertArrayEquals(bytes(10, i), data(reopened.read(keys.get(i))));
         }
@@ -310,7 +316,7 @@ public class PBKSPIndexTests {
     @Test
     public void randomOperationsMatchHashMapAcrossReopens() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         Map<Integer, byte[]> model = new HashMap<>();
         Random random = new Random(2026);
 
@@ -335,11 +341,11 @@ public class PBKSPIndexTests {
             }
 
             if (op % 7_500 == 7_499) {
-                ksp = new PBKeyStorageProvider<>(path, Integer.class);
+                ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
             }
         }
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int key = -1_000; key < 1_000; key++) {
             byte[] expected = model.get(key);
             assertEquals(expected != null, reopened.containsKey(key), "containsKey " + key);

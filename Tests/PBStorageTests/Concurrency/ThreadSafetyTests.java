@@ -15,6 +15,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -31,6 +32,11 @@ a reader can always tell whether it got the right record.
 */
 @Timeout(value = 180, unit = TimeUnit.SECONDS)
 public class ThreadSafetyTests {
+    @AfterEach
+    void closeStorages() throws Exception {
+        closeAllStorages();
+    }
+
     @TempDir
     Path dir;
 
@@ -107,7 +113,7 @@ public class ThreadSafetyTests {
     @Test
     public void concurrentReadersEachGetTheirOwnData() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         int keys = 60_000;   // ~1,800 data pages: more than the page cache holds
         for (int k = 0; k < keys; k++) {
             ksp.write(k, value(k, 1, 100));
@@ -136,7 +142,7 @@ public class ThreadSafetyTests {
 
     @Test
     public void eachResultKeepsItsOwnData() throws Exception {
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(storagePath(dir, "ksp"), Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
         ksp.write(1, value(1, 1, 20));
         ksp.write(2, value(2, 2, 30));
 
@@ -153,7 +159,7 @@ public class ThreadSafetyTests {
 
     @Test
     public void resultsHandedToOtherThreadsKeepTheirData() throws Exception {
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(storagePath(dir, "ksp"), Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
         int keys = 2_000;
         for (int k = 0; k < keys; k++) {
             ksp.write(k, value(k, 1, 50));
@@ -195,7 +201,7 @@ public class ThreadSafetyTests {
     @Test
     public void concurrentWritersOnSeparateKeys() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         int perThread = 3_000;
 
         List<ThrowingRunnable> writers = new ArrayList<>();
@@ -212,7 +218,7 @@ public class ThreadSafetyTests {
         }
         assertEquals(List.of(), runTogether(writers));
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int k = 0; k < THREADS * perThread; k++) {
             int expectedTag = (k % perThread) % 2 == 0 ? 2 : 1;
             byte[] data = data(reopened.read(k));
@@ -225,7 +231,7 @@ public class ThreadSafetyTests {
     @Test
     public void readersNeverSeeAWrongOrBrokenRecordWhileKeysAreOverwritten() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         int keys = 500;
         for (int k = 0; k < keys; k++) {
             ksp.write(k, value(k, 0, 40));
@@ -266,7 +272,7 @@ public class ThreadSafetyTests {
         }
         assertEquals(List.of(), runTogether(tasks));
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int k = 0; k < keys; k++) {
             assertEquals(k, keyOf(data(reopened.read(k))));
         }
@@ -278,7 +284,7 @@ public class ThreadSafetyTests {
     @Test
     public void mixedWritesDeletesAndReadsLeaveIndexAndDataInAgreement() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         int keys = 1_000;
 
         List<ThrowingRunnable> tasks = new ArrayList<>();
@@ -324,7 +330,7 @@ public class ThreadSafetyTests {
             "read() and the index agree on how many keys are live");
 
         // Rebuilding the index from the data pages must find exactly the same keys.
-        PBKeyStorageProvider<Integer> rebuilt = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> rebuilt = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         rebuilt.reconstructKeyIndex();
         Set<Integer> afterRebuild = new TreeSet<>();
         for (int k = 0; k < keys; k++) {
@@ -338,7 +344,7 @@ public class ThreadSafetyTests {
     @Test
     public void deleteAllWhileOthersReadAndWrite() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         int keys = 300;
         for (int k = 0; k < keys; k++) {
             ksp.write(k, value(k, 0, 30));
@@ -377,7 +383,7 @@ public class ThreadSafetyTests {
                 live++;
             }
         }
-        PBResult all = new PBKeyStorageProvider<>(path, Integer.class).read();
+        PBResult all = track(new PBKeyStorageProvider<>(released(path), Integer.class)).read();
         assertEquals(live, all.getStatus() == PBFail.NULL_READ ? 0 : dataArray(all).length);
     }
 
@@ -385,7 +391,7 @@ public class ThreadSafetyTests {
 
     @Test
     public void keylessReadsNeverSeeAHalfWrittenValue() throws Exception {
-        PBStorageProvider sp = new PBStorageProvider(storagePath(dir, "sp"));
+        PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         sp.write(bytes(100, 1));
 
         List<ThrowingRunnable> tasks = new ArrayList<>();

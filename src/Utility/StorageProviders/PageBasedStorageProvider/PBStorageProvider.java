@@ -1,5 +1,7 @@
 package Utility.StorageProviders.PageBasedStorageProvider;
 
+import java.io.Closeable;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -19,6 +21,7 @@ import StorageStatus.PB.PBSuccess;
 import Utility.Constants.Extension;
 import Utility.FileServices.RandomAccessFileService;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexBundle;
+import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexLock;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.LruCache;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.PBOffSets;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.Page;
@@ -29,8 +32,17 @@ import Utility.StorageProviders.PageBasedStorageProvider.Utility.Slot;
 /*
 Thread safety: one instance can be shared by any number of threads. Writes and
 deletes take an exclusive lock; reads share a lock, so they run in parallel
-with each other but never alongside a write. Use one instance per storage:
-two instances (or two programs) on the same .dex folder are not coordinated.
+with each other but never alongside a write.
+
+One instance per storage: opening locks the .dex folder (dex.lock), so a
+second instance, in this program or another one, gets StorageInUseException
+until the first is closed. close() releases the lock; use try-with-resources:
+
+    try (PBKeyStorageProvider<Integer> users = new PBKeyStorageProvider<>("data/users", Integer.class)) {
+        users.write(1, data);
+    }
+
+After close(), every operation returns PBFail.STORAGE_CLOSED.
 
 Space: deleting a record only marks its slot deleted; the bytes stay in the
 file until a later write reuses the slot. getDeadBytes() / getFragmentation()
@@ -42,7 +54,7 @@ Errors: operations never throw. A failure caused by an exception (an I/O error,
 a corrupt page) returns READ_ERROR / WRITE_ERROR / DELETE_ERROR / COMPACT_ERROR
 with that exception in result.getError().
 */
-public class PBStorageProvider {
+public class PBStorageProvider implements Closeable {
     /*
     Data pages kept in memory at most; older ones are dropped and re-read from
     disk when needed. 1024 pages = about 4 MB of page data.
@@ -108,17 +120,129 @@ public class PBStorageProvider {
     private final Path folder;
 
     /*
+    Held from the constructor until close(): keeps other instances and other
+    programs out of the folder.
+    */
+    private final DexLock dexLock;
+
+    /*
+    Set by close(). Read under the instance lock; volatile for isClosed().
+    */
+    private volatile boolean closed;
+
+    /*
     Opens (or creates) the storage: the folder path + ".dex" with the data file
     data.pb inside ("data/users" and "data/users.dex" are the same storage).
     Only the file header is read; pages are loaded when first used, so opening
     takes the same time for any file size.
+    Throws StorageInUseException if the storage is already open (in this
+    program or another one). If opening fails, nothing stays locked or open.
     */
     public PBStorageProvider(String path) throws Exception {
-        this.folder = DexBundle.open(path);
-        this.randomAccessFileService = new RandomAccessFileService(DexBundle.dataPath(this.folder), Extension.PB);
+        this.folder = DexBundle.createFolder(path);
+        this.dexLock = DexLock.acquire(this.folder);
         this.pageCache = new LruCache<>(DEFAULT_CACHE_PAGES);
-        this.pageCount = this.countPages();
-        this.loadFileHeader();
+
+        try {
+            DexBundle.prepare(path, this.folder);
+            this.randomAccessFileService = new RandomAccessFileService(DexBundle.dataPath(this.folder), Extension.PB);
+            this.pageCount = this.countPages();
+            this.loadFileHeader();
+        } catch (Exception e) {
+            this.closeAfterFailedOpen(e);
+            throw e;
+        }
+    }
+
+    /*
+    Closes the files and releases the storage's lock, so it can be opened again
+    (by this program or another one). Waits for operations running on other
+    threads to finish. Safe to call more than once.
+    After close(), operations return PBFail.STORAGE_CLOSED, containsKey returns
+    false, getFileSize / reconstructKeyIndex throw IllegalStateException;
+    getDeadBytes / getFragmentation keep their last values.
+    If closing a file fails, the lock is still released and the first error is
+    thrown.
+    */
+    @Override
+    public void close() throws IOException {
+        this.writeLock().lock();
+        try {
+            if (this.closed) {
+                return;
+            }
+            this.closed = true;
+
+            IOException failure = null;
+            try {
+                this.onClose();
+            } catch (IOException e) {
+                failure = e;
+            }
+            try {
+                if (this.randomAccessFileService != null) {
+                    this.randomAccessFileService.close();
+                }
+            } catch (IOException e) {
+                failure = addFailure(failure, e);
+            }
+            this.pageCache.clear();
+            try {
+                this.dexLock.close();
+            } catch (IOException e) {
+                failure = addFailure(failure, e);
+            }
+
+            if (failure != null) {
+                throw failure;
+            }
+        } finally {
+            this.writeLock().unlock();
+        }
+    }
+
+    /*
+    True once close() has been called.
+    */
+    public boolean isClosed() {
+        return this.closed;
+    }
+
+    /*
+    For constructors: closes whatever was opened and releases the lock after
+    opening failed, keeping the original error.
+    */
+    protected final void closeAfterFailedOpen(Exception cause) {
+        try {
+            this.close();
+        } catch (Exception e) {
+            cause.addSuppressed(e);
+        }
+    }
+
+    /*
+    For methods that throw rather than return a PBResult.
+    */
+    protected void ensureOpen() {
+        if (this.closed) {
+            throw new IllegalStateException("Storage " + this.folder + " is closed");
+        }
+    }
+
+    /*
+    Hook: close the subclass's own files. Runs inside close(), before the data
+    file is closed and the lock released. May run on a partly built instance
+    (when a constructor failed), so check fields for null.
+    */
+    protected void onClose() throws IOException {
+    }
+
+    private static IOException addFailure(IOException first, IOException next) {
+        if (first == null) {
+            return next;
+        }
+        first.addSuppressed(next);
+        return first;
     }
 
     /*
@@ -135,6 +259,9 @@ public class PBStorageProvider {
 
         this.writeLock().lock();
         try {
+            if (this.closed) {
+                return PBResult.of(PBFail.STORAGE_CLOSED);
+            }
             this.createNewPage(data);
         } catch (Exception e) {
             return PBResult.ofError(PBFail.WRITE_ERROR, e);
@@ -154,6 +281,9 @@ public class PBStorageProvider {
     public PBResult delete() {
         this.writeLock().lock();
         try {
+            if (this.closed) {
+                return PBResult.of(PBFail.STORAGE_CLOSED);
+            }
             this.clearAll();
         } catch (Exception e) {
             return PBResult.ofError(PBFail.DELETE_ERROR, e);
@@ -172,6 +302,9 @@ public class PBStorageProvider {
     public PBResult read() {
         this.readLock().lock();
         try {
+            if (this.closed) {
+                return PBResult.of(PBFail.STORAGE_CLOSED);
+            }
             for (int pageNumber = 0; pageNumber < this.pageCount; pageNumber++) {
                 for (Slot slot : this.getPage(pageNumber).getSlots()) {
                     if (!slot.isDeleted()) {
@@ -215,6 +348,9 @@ public class PBStorageProvider {
     public PBResult compact() {
         this.writeLock().lock();
         try {
+            if (this.closed) {
+                return PBResult.of(PBFail.STORAGE_CLOSED);
+            }
             this.rewriteCompacted();
             this.onCompacted();
         } catch (Exception e) {
@@ -259,6 +395,7 @@ public class PBStorageProvider {
     public long getFileSize() throws Exception {
         this.readLock().lock();
         try {
+            this.ensureOpen();
             return this.randomAccessFileService.length();
         } finally {
             this.readLock().unlock();

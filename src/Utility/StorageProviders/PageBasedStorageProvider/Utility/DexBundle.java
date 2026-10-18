@@ -1,6 +1,7 @@
 package Utility.StorageProviders.PageBasedStorageProvider.Utility;
 
 import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -15,13 +16,15 @@ moved or deleted as a single item:
         data.pb           records (data pages)
         index.pbi         key index and free-space index (keyed storage only)
         data-compact.pb   only while compact() runs
+        dex.lock          held by the instance that has the storage open
 
 The path given to a provider may include ".dex" or not: "data/users" and
 "data/users.dex" both mean the folder data/users.dex. The folder is created if
 needed; its parent folder must already exist.
 
 Storages written before .dex folders existed (loose users.pb / users.pbi next
-to the path) are moved into the folder the first time they are opened.
+to the path) are moved into the folder the first time they are opened, unless
+the folder already holds a data.pb.
 */
 public final class DexBundle {
     public static final String DATA_FILE = "data";
@@ -33,6 +36,13 @@ public final class DexBundle {
     so data.pb is still the complete original and the leftover is deleted.
     */
     public static final String COMPACT_FILE = "data-compact";
+
+    /*
+    Locked (through the operating system) by the instance that has the storage
+    open; see DexLock. Never replaced, unlike data.pb, so the lock survives
+    compact().
+    */
+    public static final String LOCK_FILE = "dex.lock";
 
     private DexBundle() {
     }
@@ -49,23 +59,46 @@ public final class DexBundle {
     }
 
     /*
-    Makes sure the .dex folder exists (moving old loose files into it) and
-    returns it.
+    Makes sure the .dex folder exists and returns it. Its parent folder must
+    exist already.
     */
-    public static Path open(String path) throws IOException {
+    public static Path createFolder(String path) throws IOException {
         Path folder = folderOf(path);
 
         if (Files.exists(folder) && !Files.isDirectory(folder)) {
             throw new IOException("Storage path " + folder + " exists but is not a .dex folder");
         }
 
-        if (!Files.isDirectory(folder)) {
+        try {
             Files.createDirectory(folder);
+        } catch (FileAlreadyExistsException e) {
+            if (!Files.isDirectory(folder)) {
+                throw e;
+            }
+            // Already there (possibly just created by another program): fine.
+        }
+        return folder;
+    }
+
+    /*
+    Tidies the folder before its files are opened. Call while holding the
+    storage's lock, so another program's files are never touched:
+    - a storage written before .dex folders (loose users.pb / users.pbi) is
+      moved in, if the folder has no data.pb yet;
+    - a data-compact.pb left by an interrupted compact() is deleted.
+    */
+    public static void prepare(String path, Path folder) throws IOException {
+        if (!Files.exists(dataFile(folder))) {
             migrateLooseFiles(path, folder);
         }
-
         Files.deleteIfExists(compactFile(folder));
-        return folder;
+    }
+
+    /*
+    The lock file, users.dex/dex.lock.
+    */
+    public static Path lockFile(Path folder) {
+        return folder.resolve(LOCK_FILE);
     }
 
     /*
@@ -115,8 +148,8 @@ public final class DexBundle {
         Path looseIndex = Paths.get(base + Extension.PBI.getValue());
 
         if (Files.isRegularFile(looseData)) {
-            Files.move(looseData, folder.resolve(DATA_FILE + Extension.PB.getValue()));
-            if (Files.isRegularFile(looseIndex)) {
+            Files.move(looseData, dataFile(folder));
+            if (Files.isRegularFile(looseIndex) && !Files.exists(folder.resolve(INDEX_FILE + Extension.PBI.getValue()))) {
                 Files.move(looseIndex, folder.resolve(INDEX_FILE + Extension.PBI.getValue()));
             }
         }

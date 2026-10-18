@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.file.Path;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -14,11 +15,16 @@ import StorageStatus.PB.PBSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 
 public class PBKSPDeleteTests {
+    @AfterEach
+    void closeStorages() throws Exception {
+        closeAllStorages();
+    }
+
     @TempDir
     Path dir;
 
     private PBKeyStorageProvider<Integer> newStorage() throws Exception {
-        return new PBKeyStorageProvider<>(storagePath(dir, "ksp"), Integer.class);
+        return track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
     }
 
     // ---- delete(key) -------------------------------------------------------
@@ -86,12 +92,12 @@ public class PBKSPDeleteTests {
     @Test
     public void deleteKeyPersistsAcrossReopen() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         ksp.write(1, bytes(10, 1));
         ksp.write(2, bytes(10, 2));
         ksp.delete(1);
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
         assertArrayEquals(bytes(10, 2), data(reopened.read(2)));
         assertEquals(1, dataArray(reopened.read()).length);
@@ -100,13 +106,13 @@ public class PBKSPDeleteTests {
     @Test
     public void deletedKeyCanBeWrittenAgain() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         ksp.write(1, bytes(10, 1));
         ksp.delete(1);
 
         assertSuccess(ksp.write(1, bytes(10, 2)));
         assertArrayEquals(bytes(10, 2), data(ksp.read(1)));
-        assertArrayEquals(bytes(10, 2), data(new PBKeyStorageProvider<>(path, Integer.class).read(1)));
+        assertArrayEquals(bytes(10, 2), data(track(new PBKeyStorageProvider<>(released(path), Integer.class)).read(1)));
     }
 
     @Test
@@ -121,12 +127,12 @@ public class PBKSPDeleteTests {
     @Test
     public void deleteOverwrittenKeyRemovesLatestValue() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         ksp.write(1, bytes(10, 1));
         ksp.write(1, bytes(10, 2));
         ksp.delete(1);
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
         assertFail(PBFail.NULL_READ, reopened.read());
     }
@@ -134,7 +140,7 @@ public class PBKSPDeleteTests {
     @Test
     public void deleteManyKeysAcrossPages() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 200; i++) {
             ksp.write(i, bytes(50, i));
         }
@@ -142,7 +148,7 @@ public class PBKSPDeleteTests {
             assertEquals(PBSuccess.DELETE, ksp.delete(i).getStatus());
         }
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 200; i++) {
             if (i % 2 == 0) {
                 assertFail(PBFail.KEY_NOT_FOUND, reopened.read(i));
@@ -186,7 +192,7 @@ public class PBKSPDeleteTests {
     @Test
     public void deleteAllTruncatesFileToHeader() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 300; i++) {
             ksp.write(i, bytes(50, 1));
         }
@@ -199,26 +205,26 @@ public class PBKSPDeleteTests {
     @Test
     public void deleteAllKeepsKeyType() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         ksp.write(1, bytes(10, 1));
         ksp.delete();
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertEquals(Integer.class, reopened.getKeyType());
         assertFail(PBFail.NULL_READ, reopened.read());
-        assertThrows(IllegalStateException.class, () -> new PBKeyStorageProvider<>(path, String.class));
+        assertThrows(IllegalStateException.class, () -> track(new PBKeyStorageProvider<>(released(path), String.class)));
     }
 
     @Test
     public void writeAfterDeleteAll() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         ksp.write(1, bytes(10, 1));
         ksp.delete();
 
         assertSuccess(ksp.write(2, bytes(10, 2)));
 
-        PBKeyStorageProvider<Integer> reopened = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
         assertArrayEquals(bytes(10, 2), data(reopened.read(2)));
         assertEquals(lengthForPages(1), fileLength(path));
@@ -227,7 +233,7 @@ public class PBKSPDeleteTests {
     @Test
     public void deleteAllDiscardsDeletedSlots() throws Exception {
         String path = storagePath(dir, "ksp");
-        PBKeyStorageProvider<Integer> ksp = new PBKeyStorageProvider<>(path, Integer.class);
+        PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 10; i++) {
             ksp.write(i, bytes(10, i));
         }
@@ -236,7 +242,7 @@ public class PBKSPDeleteTests {
 
         // Slots freed before delete() pointed into the old pages; writing must not reuse them.
         assertSuccess(ksp.write(100, bytes(10, 7)));
-        assertArrayEquals(bytes(10, 7), data(new PBKeyStorageProvider<>(path, Integer.class).read(100)));
         assertEquals(1, dataArray(ksp.read()).length);
+        assertArrayEquals(bytes(10, 7), data(track(new PBKeyStorageProvider<>(released(path), Integer.class)).read(100)));
     }
 }
