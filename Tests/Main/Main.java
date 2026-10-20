@@ -13,11 +13,11 @@ public class Main {
 
         try {
             PBKeyStorageProvider<Integer> sp = new PBKeyStorageProvider<>(containerName, Integer.class);
-            // TestObject tO1 = new TestObject("TO 1");
-            // byte[] data1 = Serializer.serialize(tO1);
+            TestObject tO1 = new TestObject("TO 1");
+            byte[] data1 = Serializer.serialize(tO1);
 
-            // sp.write(1, data1);
-            PBResult result = sp.read(1);
+            PBResult result = sp.write(1, data1);
+            // PBResult result = sp.read(1);
 
             if (result.hasSucceeded()) {
                 byte[] data = result.getData();
@@ -30,20 +30,20 @@ public class Main {
 
             sp.close();
 
-            PBKeyStorageProvider<Integer> sp2 = new PBKeyStorageProvider<>(containerName, Integer.class);
+            // PBKeyStorageProvider<Integer> sp2 = new PBKeyStorageProvider<>(containerName, Integer.class);
 
-            PBResult result2 = sp2.read(1);
+            // PBResult result2 = sp2.read(1);
 
-            if (result2.hasSucceeded()) {
-                byte[] data = result2.getData();
-                TestObject obj = Serializer.deserialize(data);
+            // if (result2.hasSucceeded()) {
+            //     byte[] data = result2.getData();
+            //     TestObject obj = Serializer.deserialize(data);
 
-                System.out.println(obj.value);
-            } else {
-                System.out.println(result2.getError());
-            }
+            //     System.out.println(obj.value);
+            // } else {
+            //     System.out.println(result2.getError());
+            // }
 
-            sp2.close();
+            // sp2.close();
 
         } catch (Exception e) {
             System.out.println(e);

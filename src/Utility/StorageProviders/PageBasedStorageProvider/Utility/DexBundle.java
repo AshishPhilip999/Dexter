@@ -17,6 +17,7 @@ moved or deleted as a single item:
         index.pbi         key index and free-space index (keyed storage only)
         data-compact.pb   only while compact() runs
         dex.lock          held by the instance that has the storage open
+        journal.wal       operations not yet copied into data.pb / index.pbi
 
 The path given to a provider may include ".dex" or not: "data/users" and
 "data/users.dex" both mean the folder data/users.dex. The folder is created if
@@ -43,6 +44,11 @@ public final class DexBundle {
     compact().
     */
     public static final String LOCK_FILE = "dex.lock";
+
+    /*
+    The write-ahead journal (see Journal): journal.wal.
+    */
+    public static final String JOURNAL_FILE = "journal";
 
     private DexBundle() {
     }
@@ -92,6 +98,20 @@ public final class DexBundle {
             migrateLooseFiles(path, folder);
         }
         Files.deleteIfExists(compactFile(folder));
+    }
+
+    /*
+    Path of the journal without its extension, e.g. users.dex/journal.
+    */
+    public static String journalPath(Path folder) {
+        return folder.resolve(JOURNAL_FILE).toString();
+    }
+
+    /*
+    The journal, users.dex/journal.wal.
+    */
+    public static Path journalFile(Path folder) {
+        return folder.resolve(JOURNAL_FILE + Extension.WAL.getValue());
     }
 
     /*

@@ -151,6 +151,8 @@ public class PBKSPIndexTests {
             storeB.write(i * 2, bytes(10, 2));
         }
 
+        released(a);
+        released(b);
         Files.copy(indexFile(a).toPath(), indexFile(b).toPath(), StandardCopyOption.REPLACE_EXISTING);
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(b), Integer.class));
@@ -167,6 +169,7 @@ public class PBKSPIndexTests {
         }
 
         // Make it look like a file from before file ids and index files existed.
+        released(path);
         try (RandomAccessFile raf = new RandomAccessFile(datFile(path), "rw")) {
             raf.seek(FILE_HEADER - Long.BYTES);
             raf.writeLong(0L);
@@ -208,6 +211,7 @@ public class PBKSPIndexTests {
         ksp.write(1, bytes(10, 2));   // page 0, slot 1; slot 0 marked deleted
 
         // Simulate a crash before the old slot was marked deleted: un-delete slot 0.
+        released(path);
         long slot0DeletedFlag = FILE_HEADER + PAGE_HEADER + 16;
         try (RandomAccessFile raf = new RandomAccessFile(datFile(path), "rw")) {
             raf.seek(slot0DeletedFlag);
@@ -261,10 +265,12 @@ public class PBKSPIndexTests {
         for (int i = 0; i < 10_000; i++) {
             ksp.write(i, bytes(10, i));
         }
+        checkpointIfOpen(path);
         long before = indexFile(path).length();
 
         ksp.delete();
 
+        checkpointIfOpen(path);
         assertTrue(indexFile(path).length() < before);
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));

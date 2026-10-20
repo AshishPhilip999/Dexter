@@ -8,6 +8,8 @@ public enum PBSuccess implements PBStatus {
     READ,
     WRITE,
     DELETE,
-    COMPACT
+    COMPACT,
+    SYNC,
+    CHECKPOINT
     ;
 }

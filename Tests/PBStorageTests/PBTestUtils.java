@@ -109,8 +109,27 @@ public final class PBTestUtils {
         return new File(dexFolder(path), "index.pbi");
     }
 
-    public static long fileLength(String path) {
+    /*
+    Length of data.pb on disk. If this test has the storage open, its journal
+    is checkpointed first, so the file holds every operation so far.
+    */
+    public static long fileLength(String path) throws Exception {
+        checkpointIfOpen(path);
         return datFile(path).length();
+    }
+
+    /*
+    Makes the files on disk complete for a storage this test has open (see
+    track), e.g. before a test inspects or changes them directly.
+    */
+    public static void checkpointIfOpen(String path) throws Exception {
+        PBStorageProvider open;
+        synchronized (OPEN) {
+            open = OPEN.get(key(path));
+        }
+        if (open != null && !open.isClosed()) {
+            assertSuccess(open.checkpoint());
+        }
     }
 
     /*

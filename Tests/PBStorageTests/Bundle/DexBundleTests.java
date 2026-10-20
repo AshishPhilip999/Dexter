@@ -53,7 +53,7 @@ public class DexBundleTests {
         track(new PBKeyStorageProvider<>(released(path), Integer.class)).write(1, bytes(10, 1));
 
         assertTrue(dexFolder(path).isDirectory());
-        assertArrayEquals(new String[] { "data.pb", "dex.lock", "index.pbi" }, namesIn(dexFolder(path)));
+        assertArrayEquals(new String[] { "data.pb", "dex.lock", "index.pbi", "journal.wal" }, namesIn(dexFolder(path)));
         assertArrayEquals(new String[] { "users.dex" }, namesIn(dir.toFile()), "nothing else is created beside it");
     }
 
@@ -62,7 +62,7 @@ public class DexBundleTests {
         String path = storagePath(dir, "settings");
         track(new PBStorageProvider(released(path))).write(bytes(10, 1));
 
-        assertArrayEquals(new String[] { "data.pb", "dex.lock" }, namesIn(dexFolder(path)));
+        assertArrayEquals(new String[] { "data.pb", "dex.lock", "journal.wal" }, namesIn(dexFolder(path)));
         assertArrayEquals(new String[] { "settings.dex" }, namesIn(dir.toFile()));
     }
 
@@ -165,6 +165,7 @@ public class DexBundleTests {
             Files.delete(indexFile(path).toPath());
         }
         Files.delete(new File(dexFolder(path), "dex.lock").toPath());
+        Files.delete(new File(dexFolder(path), "journal.wal").toPath());
         Files.delete(dexFolder(path).toPath());
         return path;
     }
@@ -176,7 +177,7 @@ public class DexBundleTests {
         PBKeyStorageProvider<Integer> opened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
 
         assertArrayEquals(new String[] { "legacy.dex" }, namesIn(dir.toFile()), "loose files moved, none left behind");
-        assertArrayEquals(new String[] { "data.pb", "dex.lock", "index.pbi" }, namesIn(dexFolder(path)));
+        assertArrayEquals(new String[] { "data.pb", "dex.lock", "index.pbi", "journal.wal" }, namesIn(dexFolder(path)));
         assertArrayEquals(bytes(10, 499), data(opened.read(499)));
         assertFail(PBFail.KEY_NOT_FOUND, opened.read(7));
     }
@@ -187,7 +188,7 @@ public class DexBundleTests {
 
         PBKeyStorageProvider<Integer> opened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
 
-        assertArrayEquals(new String[] { "data.pb", "dex.lock", "index.pbi" }, namesIn(dexFolder(path)));
+        assertArrayEquals(new String[] { "data.pb", "dex.lock", "index.pbi", "journal.wal" }, namesIn(dexFolder(path)));
         assertArrayEquals(bytes(10, 250), data(opened.read(250)));
         assertEquals(499, dataArray(opened.read()).length);
     }

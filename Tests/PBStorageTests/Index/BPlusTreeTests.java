@@ -296,7 +296,7 @@ public class BPlusTreeTests {
     }
 
     @Test
-    public void clearEmptiesEveryTreeButKeepsDataFileId() throws Exception {
+    public void clearEmptiesEveryTreeAndResetsDataFileId() throws Exception {
         IndexFile file = open(32);
         file.setDataFileId(1234L);
         BPlusTree a = new BPlusTree(file, 0);
@@ -311,9 +311,10 @@ public class BPlusTreeTests {
         assertTrue(a.isEmpty());
         assertTrue(b.isEmpty());
         assertEquals(0, file.getPageCount());
-        assertEquals(1234L, file.getDataFileId());
+        assertEquals(0L, file.getDataFileId(), "a cleared index belongs to no data file until it is complete");
 
         a.put(intKey(1), value(1));
+        file.setDataFileId(1234L);
         IndexFile reopened = open(32);
         assertEquals(1234L, reopened.getDataFileId());
         assertArrayEquals(value(1), new BPlusTree(reopened, 0).get(intKey(1)));
