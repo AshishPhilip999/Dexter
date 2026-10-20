@@ -13,6 +13,7 @@ import Utility.Constants.Extension;
 import Utility.Encoding.KeyCodec;
 import Utility.StorageProviders.PageBasedStorageProvider.Index.BPlusTree;
 import Utility.StorageProviders.PageBasedStorageProvider.Index.IndexFile;
+import Utility.StorageProviders.PageBasedStorageProvider.Journal.Journal;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexBundle;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.Page;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.RecordID;
@@ -80,22 +81,39 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     private final BPlusTree freeSpace;
 
     /*
+    False while the index is being rebuilt, and after a rebuild failed: every
+    call then rebuilds it first (repairIfNeeded), instead of answering from an
+    incomplete index.
+    */
+    private volatile boolean indexValid = true;
+
+    /*
     Throws StorageInUseException if the storage is already open, and
     IllegalStateException if it holds a different key type. If opening fails,
     nothing stays locked or open.
     */
     public PBKeyStorageProvider(String path, Class<K> keyType) throws Exception {
-        super(path);
+        this(path, keyType, Durability.NORMAL);
+    }
+
+    /*
+    As above, choosing how hard writes work to survive a power cut (see
+    Durability).
+    */
+    public PBKeyStorageProvider(String path, Class<K> keyType, Durability durability) throws Exception {
+        super(path, durability);
         try {
             this.keyType = checkedKeyType(keyType);
             this.bindStoredKeyType();
 
-            this.indexFile = new IndexFile(DexBundle.indexPath(this.getFolder()), Extension.PBI);
+            this.indexFile = new IndexFile(this.journal().openFile(Journal.INDEX_FILE), IndexFile.DEFAULT_CACHE_PAGES);
             this.keyIndex = new BPlusTree(this.indexFile, KEY_INDEX_TREE);
             this.freeSpace = new BPlusTree(this.indexFile, FREE_SPACE_TREE);
 
             if (this.indexFile.getDataFileId() != this.getFileId()) {
-                this.reconstructKeyIndex();
+                this.rebuildIndex();
+            } else {
+                this.commitOperation();
             }
         } catch (Exception e) {
             this.closeAfterFailedOpen(e);
@@ -151,7 +169,14 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     Rebuilds the index file from the data pages: every live keyed record goes
     into the key index, every deleted slot into the free-space tree. Runs
     automatically on open when the index file is missing or doesn't belong to
-    the data file; call it yourself to repair an index after a crash.
+    the data file, after compact(), and before the next call after a failed
+    rebuild. You normally don't need to call it.
+
+    The rebuild writes index.pbi directly rather than through the journal (it
+    is itself the recovery path): the index is marked as belonging to no data
+    file while it is built, and only after every node is flushed to disk does
+    it get the data file's id. A crash part-way leaves an index that doesn't
+    match, which is rebuilt on the next open.
     */
     public void reconstructKeyIndex() throws Exception {
         this.writeLock().lock();
@@ -164,6 +189,21 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     }
 
     private void rebuildIndex() throws Exception {
+        this.indexValid = false;
+        this.commitOperation();
+        this.journal().setDirect(true);
+        try {
+            this.buildIndex();
+            this.journal().forceFiles();                       // every node and slot change is on disk ...
+            this.indexFile.setDataFileId(this.getFileId());    // ... before the index is marked as valid
+            this.indexFile.force();
+            this.indexValid = true;
+        } finally {
+            this.journal().setDirect(false);
+        }
+    }
+
+    private void buildIndex() throws Exception {
         this.indexFile.clear();
 
         for (int pageNumber = 0; pageNumber < this.getPageCount(); pageNumber++) {
@@ -197,33 +237,8 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
                 }
             }
         }
-
-        this.indexFile.setDataFileId(this.getFileId());
     }
 
-    /*
-    Keyless write behaves exactly like the parent: all existing pages are dropped
-    and a single new page is written with this data. The index is cleared too.
-    SUCCESS: PBSuccess.WRITE, result.getData() holds the written data
-    FAIL:    NULL_WRITE, DATA_TOO_LARGE, WRITE_ERROR
-    */
-    @Override
-    public PBResult write(byte[] data) {
-        this.writeLock().lock();
-        try {
-            PBResult result = super.write(data);
-            if (!result.hasSucceeded()) {
-                return result;
-            }
-
-            this.resetIndex();
-        } catch (Exception e) {
-            return PBResult.ofError(PBFail.WRITE_ERROR, e);
-        } finally {
-            this.writeLock().unlock();
-        }
-        return PBResult.of(PBSuccess.WRITE, data);
-    }
 
     /*
     Writes data against a key. The record [encoded key][data] goes into the
@@ -259,6 +274,12 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
             return PBResult.of(invalidRecord);
         }
 
+        try {
+            this.repairIfNeeded();
+        } catch (Exception e) {
+            return PBResult.ofError(PBFail.WRITE_ERROR, e);
+        }
+
         this.writeLock().lock();
         try {
             if (this.isClosed()) {
@@ -270,7 +291,9 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
             if (previous != null) {
                 this.markSlotDeleted(decodeRecordID(previous));
             }
+            this.commitOperation();
         } catch (Exception e) {
+            this.rollbackOperation(e);
             return PBResult.ofError(PBFail.WRITE_ERROR, e);
         } finally {
             this.writeLock().unlock();
@@ -293,6 +316,11 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
         byte[] keyBytes = this.encodeForLookup(key);
         if (keyBytes == null) {
             return PBResult.of(PBFail.KEY_NOT_FOUND);
+        }
+        try {
+            this.repairIfNeeded();
+        } catch (Exception e) {
+            return PBResult.ofError(PBFail.READ_ERROR, e);
         }
 
         this.readLock().lock();
@@ -335,6 +363,12 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     */
     @Override
     public PBResult read() {
+        try {
+            this.repairIfNeeded();
+        } catch (Exception e) {
+            return PBResult.ofError(PBFail.READ_ERROR, e);
+        }
+
         byte[][] records;
         this.readLock().lock();
         try {
@@ -356,7 +390,8 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
 
     /*
     Deletes the record of one key: the key leaves the index, and its slot is
-    marked deleted and becomes reusable by later writes.
+    marked deleted and becomes reusable by later writes. Both happen or
+    neither does.
     SUCCESS: PBSuccess.DELETE
     FAIL:    NULL_KEY, KEY_TYPE_MISMATCH, KEY_NOT_FOUND, DELETE_ERROR
     */
@@ -371,6 +406,12 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
             return PBResult.of(PBFail.KEY_NOT_FOUND);
         }
 
+        try {
+            this.repairIfNeeded();
+        } catch (Exception e) {
+            return PBResult.ofError(PBFail.DELETE_ERROR, e);
+        }
+
         this.writeLock().lock();
         try {
             if (this.isClosed()) {
@@ -381,7 +422,9 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
                 return PBResult.of(PBFail.KEY_NOT_FOUND);
             }
             this.markSlotDeleted(decodeRecordID(location));
+            this.commitOperation();
         } catch (Exception e) {
+            this.rollbackOperation(e);
             return PBResult.ofError(PBFail.DELETE_ERROR, e);
         } finally {
             this.writeLock().unlock();
@@ -390,28 +433,6 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
         return PBResult.of(PBSuccess.DELETE);
     }
 
-    /*
-    Erases everything, like the parent, and clears the index.
-    SUCCESS: PBSuccess.DELETE
-    FAIL:    DELETE_ERROR
-    */
-    @Override
-    public PBResult delete() {
-        this.writeLock().lock();
-        try {
-            PBResult result = super.delete();
-            if (!result.hasSucceeded()) {
-                return result;
-            }
-
-            this.resetIndex();
-        } catch (Exception e) {
-            return PBResult.ofError(PBFail.DELETE_ERROR, e);
-        } finally {
-            this.writeLock().unlock();
-        }
-        return PBResult.of(PBSuccess.DELETE);
-    }
 
     /*
     false for a null key, a key of the wrong type, or on a read error.
@@ -422,6 +443,11 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
         }
         byte[] keyBytes = this.encodeForLookup(key);
         if (keyBytes == null) {
+            return false;
+        }
+        try {
+            this.repairIfNeeded();
+        } catch (Exception e) {
             return false;
         }
         this.readLock().lock();
@@ -492,6 +518,41 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     @Override
     protected void onCompacted() throws Exception {
         this.rebuildIndex();
+    }
+
+    /*
+    delete() / keyless write() erased the data file: start an empty index for
+    it, inside the same operation.
+    */
+    @Override
+    protected void onCleared() throws Exception {
+        this.resetIndex();
+    }
+
+    /*
+    After a rolled-back operation: drop cached index nodes and re-read the
+    index header.
+    */
+    @Override
+    protected void onReload() throws Exception {
+        this.indexFile.reload();
+    }
+
+    @Override
+    protected boolean needsRepair() {
+        return super.needsRepair() || !this.indexValid;
+    }
+
+    /*
+    Runs under the write lock: the parent's repair, then a rebuild of the
+    index if the last one failed.
+    */
+    @Override
+    protected void repair() throws Exception {
+        super.repair();
+        if (!this.indexValid) {
+            this.rebuildIndex();
+        }
     }
 
     // ---- helpers --------------------------------------------------------------

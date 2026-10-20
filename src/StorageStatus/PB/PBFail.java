@@ -66,6 +66,19 @@ public enum PBFail implements PBStatus {
     /*
     The storage was closed with close(); open a new instance to use it again.
     */
-    STORAGE_CLOSED
+    STORAGE_CLOSED,
+
+    /*
+    I/O error while flushing the journal in sync(). Operations committed before
+    are still in the journal; they just may not be on the disk yet.
+    */
+    SYNC_ERROR,
+
+    /*
+    I/O error while copying the journal into the files in checkpoint(). Nothing
+    is lost: the journal keeps every change and the next checkpoint (or the
+    next open) applies it again.
+    */
+    CHECKPOINT_ERROR
     ;
 }

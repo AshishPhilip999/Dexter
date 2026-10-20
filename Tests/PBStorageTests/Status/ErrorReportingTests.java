@@ -46,9 +46,11 @@ public class ErrorReportingTests {
 
     /*
     Overwrites the page's stored offset, so loading the page fails its
-    consistency check. Open a new instance afterwards: cached pages aren't re-read.
+    consistency check. Closes the storage first (as if the program had ended),
+    so its journal can't write the page back; open a new instance afterwards.
     */
     private static void corruptPage(String path, int page) throws Exception {
+        released(path);
         try (RandomAccessFile file = new RandomAccessFile(datFile(path), "rw")) {
             file.seek(lengthForPages(page));
             file.writeLong(123456789L);
@@ -125,8 +127,10 @@ public class ErrorReportingTests {
         String path = storagePath(dir, "ksp");
         PBKeyStorageProvider<Integer> ksp = withKeys(path, 5);
         Path savedIndex = dir.resolve("saved.pbi");
+        checkpointIfOpen(path);
         Files.copy(indexFile(path).toPath(), savedIndex);
         ksp.delete(2);
+        released(path);
         // The old index still says key 2 lives in a slot that is now deleted.
         Files.copy(savedIndex, indexFile(path).toPath(), StandardCopyOption.REPLACE_EXISTING);
 

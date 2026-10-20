@@ -5,7 +5,8 @@ public enum Extension {
     JSON(".json"),
     PB(".pb"),
     PBI(".pbi"),
-    DEX(".dex")
+    DEX(".dex"),
+    WAL(".wal")
     ;
 
     private String value;

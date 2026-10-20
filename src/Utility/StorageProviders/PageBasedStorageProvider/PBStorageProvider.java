@@ -20,6 +20,7 @@ import StorageStatus.PB.PBResult;
 import StorageStatus.PB.PBSuccess;
 import Utility.Constants.Extension;
 import Utility.FileServices.RandomAccessFileService;
+import Utility.StorageProviders.PageBasedStorageProvider.Journal.Journal;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexBundle;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexLock;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.LruCache;
@@ -43,6 +44,15 @@ until the first is closed. close() releases the lock; use try-with-resources:
     }
 
 After close(), every operation returns PBFail.STORAGE_CLOSED.
+
+Crash safety: every write and delete is all-or-nothing. Its changes are
+collected while it runs and committed as one record to the journal
+(journal.wal); data.pb and index.pbi receive them at checkpoints. If the
+program or the machine stops at any point, the next open replays the journal
+and the storage is exactly as it was after some complete operation (see
+Durability for what a power cut can lose). If an operation fails part-way (an
+I/O error, a corrupt page), its changes are discarded and the instance reloads
+its state, so the storage is as it was before the call.
 
 Space: deleting a record only marks its slot deleted; the bytes stay in the
 file until a later write reuses the slot. getDeadBytes() / getFragmentation()
@@ -112,7 +122,26 @@ public class PBStorageProvider implements Closeable {
     */
     private long deadBytes;
 
+    /*
+    data.pb, read and written through the journal.
+    */
     private RandomAccessFileService randomAccessFileService;
+
+    private final Durability durability;
+
+    /*
+    journal.wal: commits operations, checkpoints them into the files and
+    replays them after a crash.
+    */
+    private Journal journal;
+
+    /*
+    Set when the in-memory state couldn't be reloaded after a failed operation,
+    or data.pb couldn't be reopened after compact(). The next call repairs it
+    first (see repairIfNeeded).
+    */
+    private volatile boolean needsReload;
+    private volatile boolean needsReopen;
 
     /*
     The storage's .dex folder.
@@ -139,15 +168,30 @@ public class PBStorageProvider implements Closeable {
     program or another one). If opening fails, nothing stays locked or open.
     */
     public PBStorageProvider(String path) throws Exception {
+        this(path, Durability.NORMAL);
+    }
+
+    /*
+    As above, choosing how hard writes work to survive a power cut (see
+    Durability). Opening first replays whatever a previous run left in the
+    journal (getRecoveredOperations() says how much).
+    */
+    public PBStorageProvider(String path, Durability durability) throws Exception {
+        if (durability == null) {
+            throw new IllegalArgumentException("Durability cannot be null");
+        }
+        this.durability = durability;
         this.folder = DexBundle.createFolder(path);
         this.dexLock = DexLock.acquire(this.folder);
         this.pageCache = new LruCache<>(DEFAULT_CACHE_PAGES);
 
         try {
             DexBundle.prepare(path, this.folder);
-            this.randomAccessFileService = new RandomAccessFileService(DexBundle.dataPath(this.folder), Extension.PB);
+            this.journal = Journal.open(this.folder, durability);
+            this.randomAccessFileService = this.journal.openFile(Journal.DATA_FILE);
             this.pageCount = this.countPages();
             this.loadFileHeader();
+            this.journal.commit();
         } catch (Exception e) {
             this.closeAfterFailedOpen(e);
             throw e;
@@ -175,13 +219,29 @@ public class PBStorageProvider implements Closeable {
 
             IOException failure = null;
             try {
+                if (this.journal != null) {
+                    this.journal.rollback();
+                    this.journal.checkpoint();   // leaves data.pb / index.pbi complete
+                }
+            } catch (Exception e) {
+                // Nothing is lost: the journal keeps the changes for the next open.
+                failure = e instanceof IOException ? (IOException) e : new IOException(e);
+            }
+            try {
                 this.onClose();
             } catch (IOException e) {
-                failure = e;
+                failure = addFailure(failure, e);
             }
             try {
                 if (this.randomAccessFileService != null) {
                     this.randomAccessFileService.close();
+                }
+            } catch (IOException e) {
+                failure = addFailure(failure, e);
+            }
+            try {
+                if (this.journal != null) {
+                    this.journal.close();
                 }
             } catch (IOException e) {
                 failure = addFailure(failure, e);
@@ -237,6 +297,106 @@ public class PBStorageProvider implements Closeable {
     protected void onClose() throws IOException {
     }
 
+    // ---- operations: commit, roll back, repair --------------------------------------
+
+    /*
+    The storage's journal, for subclasses that write.
+    */
+    protected final Journal journal() {
+        return this.journal;
+    }
+
+    /*
+    Ends a successful operation: its changes become one journal record.
+    Call under the write lock. If it throws, call rollbackOperation.
+    */
+    protected final void commitOperation() throws Exception {
+        this.journal.commit();
+    }
+
+    /*
+    Ends a failed operation: its changes are discarded and the in-memory state
+    (pages, header fields, subclass state) is reloaded, so the storage is as it
+    was before the operation. If reloading fails too, the next call retries it
+    first. Call under the write lock.
+    */
+    protected final void rollbackOperation(Exception cause) {
+        this.journal.rollback();
+        try {
+            this.reloadState();
+        } catch (Exception e) {
+            this.needsReload = true;
+            cause.addSuppressed(e);
+        }
+    }
+
+    /*
+    Called at the start of every operation, before it takes its lock: if an
+    earlier failure left the instance needing repair (see needsRepair), repairs
+    it under the write lock. Throws if repairing fails; the operation then
+    reports that error.
+    */
+    protected final void repairIfNeeded() throws Exception {
+        if (!this.needsRepair()) {
+            return;
+        }
+        this.writeLock().lock();
+        try {
+            if (!this.closed && this.needsRepair()) {
+                this.repair();
+            }
+        } finally {
+            this.writeLock().unlock();
+        }
+    }
+
+    /*
+    Hook: true if the instance must be repaired before the next operation.
+    Subclasses add their own conditions (and call super).
+    */
+    protected boolean needsRepair() {
+        return this.needsReload || this.needsReopen;
+    }
+
+    /*
+    Hook: repairs the instance. Runs under the write lock. Subclasses repair
+    their own state after calling super.
+    */
+    protected void repair() throws Exception {
+        if (this.needsReopen) {
+            this.reopenDataFile();
+            this.onReload();
+            this.needsReopen = false;
+            this.needsReload = false;
+        }
+        if (this.needsReload) {
+            this.reloadState();
+            this.needsReload = false;
+        }
+    }
+
+    /*
+    Hook: reload the subclass's in-memory state from its files (after a
+    rollback). Runs under the write lock.
+    */
+    protected void onReload() throws Exception {
+    }
+
+    /*
+    Hook: the storage was just erased (delete(), keyless write). Runs inside
+    that operation, so the subclass's changes commit or roll back with it.
+    */
+    protected void onCleared() throws Exception {
+    }
+
+    private void reloadState() throws Exception {
+        this.pageCache.clear();
+        this.pageCount = this.countPages();
+        this.loadFileHeader();
+        this.onReload();
+        this.journal.commit();   // in case loading had to write (an old header upgraded)
+    }
+
     private static IOException addFailure(IOException first, IOException next) {
         if (first == null) {
             return next;
@@ -256,6 +416,11 @@ public class PBStorageProvider implements Closeable {
         if (invalid != null) {
             return PBResult.of(invalid);
         }
+        try {
+            this.repairIfNeeded();
+        } catch (Exception e) {
+            return PBResult.ofError(PBFail.WRITE_ERROR, e);
+        }
 
         this.writeLock().lock();
         try {
@@ -263,7 +428,9 @@ public class PBStorageProvider implements Closeable {
                 return PBResult.of(PBFail.STORAGE_CLOSED);
             }
             this.createNewPage(data);
+            this.commitOperation();
         } catch (Exception e) {
+            this.rollbackOperation(e);
             return PBResult.ofError(PBFail.WRITE_ERROR, e);
         } finally {
             this.writeLock().unlock();
@@ -279,13 +446,21 @@ public class PBStorageProvider implements Closeable {
     FAIL:    DELETE_ERROR
     */
     public PBResult delete() {
+        try {
+            this.repairIfNeeded();
+        } catch (Exception e) {
+            return PBResult.ofError(PBFail.DELETE_ERROR, e);
+        }
+
         this.writeLock().lock();
         try {
             if (this.closed) {
                 return PBResult.of(PBFail.STORAGE_CLOSED);
             }
             this.clearAll();
+            this.commitOperation();
         } catch (Exception e) {
+            this.rollbackOperation(e);
             return PBResult.ofError(PBFail.DELETE_ERROR, e);
         } finally {
             this.writeLock().unlock();
@@ -300,6 +475,12 @@ public class PBStorageProvider implements Closeable {
     FAIL:    NULL_READ (nothing stored), READ_ERROR
     */
     public PBResult read() {
+        try {
+            this.repairIfNeeded();
+        } catch (Exception e) {
+            return PBResult.ofError(PBFail.READ_ERROR, e);
+        }
+
         this.readLock().lock();
         try {
             if (this.closed) {
@@ -331,7 +512,11 @@ public class PBStorageProvider implements Closeable {
     2. It is renamed over data.pb in one step: the folder holds either the old
        file or the new one, never a mix.
     3. Subclass work (PBKeyStorageProvider rebuilds its index for the new
-       record positions).
+       record positions). If that fails it is tried once more; if it still
+       fails, COMPACT_ERROR is returned and every later call tries again
+       before using the index, so the instance never answers from a stale one.
+
+    The journal is checkpointed first, so data.pb holds every operation.
 
     Interrupted before 2, data.pb is untouched and the leftover temp file is
     deleted on the next open. Interrupted after 2, the new data.pb is complete
@@ -346,20 +531,97 @@ public class PBStorageProvider implements Closeable {
     FAIL:    COMPACT_ERROR
     */
     public PBResult compact() {
+        try {
+            this.repairIfNeeded();
+        } catch (Exception e) {
+            return PBResult.ofError(PBFail.COMPACT_ERROR, e);
+        }
+
         this.writeLock().lock();
         try {
             if (this.closed) {
                 return PBResult.of(PBFail.STORAGE_CLOSED);
             }
-            this.rewriteCompacted();
-            this.onCompacted();
-        } catch (Exception e) {
-            return PBResult.ofError(PBFail.COMPACT_ERROR, e);
+            try {
+                this.journal.checkpoint();
+                this.rewriteCompacted();
+            } catch (Exception e) {
+                return PBResult.ofError(PBFail.COMPACT_ERROR, e);
+            }
+
+            try {
+                this.onCompacted();
+            } catch (Exception first) {
+                try {
+                    this.onCompacted();      // once more, from scratch
+                } catch (Exception second) {
+                    first.addSuppressed(second);
+                    return PBResult.ofError(PBFail.COMPACT_ERROR, first);
+                }
+            }
         } finally {
             this.writeLock().unlock();
         }
 
         return PBResult.of(PBSuccess.COMPACT);
+    }
+
+    /*
+    Flushes the journal to disk, so every operation that returned success so
+    far survives a power cut (with Durability.SYNC that is already true). Much
+    cheaper than checkpoint().
+    SUCCESS: PBSuccess.SYNC
+    FAIL:    SYNC_ERROR
+    */
+    public PBResult sync() {
+        this.writeLock().lock();
+        try {
+            if (this.closed) {
+                return PBResult.of(PBFail.STORAGE_CLOSED);
+            }
+            this.journal.sync();
+        } catch (Exception e) {
+            return PBResult.ofError(PBFail.SYNC_ERROR, e);
+        } finally {
+            this.writeLock().unlock();
+        }
+        return PBResult.of(PBSuccess.SYNC);
+    }
+
+    /*
+    Copies every journaled operation into data.pb / index.pbi, flushes them to
+    disk and empties the journal. Happens on its own every few MB of changes,
+    before compact() and on close(); call it to have the files complete now
+    (e.g. before copying them elsewhere).
+    SUCCESS: PBSuccess.CHECKPOINT
+    FAIL:    CHECKPOINT_ERROR (nothing is lost; the journal still has everything)
+    */
+    public PBResult checkpoint() {
+        this.writeLock().lock();
+        try {
+            if (this.closed) {
+                return PBResult.of(PBFail.STORAGE_CLOSED);
+            }
+            this.journal.checkpoint();
+        } catch (Exception e) {
+            return PBResult.ofError(PBFail.CHECKPOINT_ERROR, e);
+        } finally {
+            this.writeLock().unlock();
+        }
+        return PBResult.of(PBSuccess.CHECKPOINT);
+    }
+
+    public Durability getDurability() {
+        return this.durability;
+    }
+
+    /*
+    Operations replayed from the journal when this instance opened the storage:
+    work a previous run had committed but not yet written into the files
+    (typically because it crashed or was killed). 0 after a clean close().
+    */
+    public int getRecoveredOperations() {
+        return this.journal.getRecoveredOperations();
     }
 
     /*
@@ -390,7 +652,8 @@ public class PBStorageProvider implements Closeable {
     }
 
     /*
-    Current size of the data file in bytes.
+    Size of the data file in bytes, including operations still in the journal
+    (data.pb on disk reaches this size at the next checkpoint).
     */
     public long getFileSize() throws Exception {
         this.readLock().lock();
@@ -684,7 +947,12 @@ public class PBStorageProvider implements Closeable {
             deleteQuietly(tempFile, e);
             throw e;
         } finally {
-            this.reopenDataFile();
+            try {
+                this.reopenDataFile();
+            } catch (Exception e) {
+                this.needsReopen = true;   // the next call tries again
+                throw e;
+            }
         }
     }
 
@@ -715,7 +983,7 @@ public class PBStorageProvider implements Closeable {
     everything cached from the old file.
     */
     private void reopenDataFile() throws Exception {
-        this.randomAccessFileService = new RandomAccessFileService(DexBundle.dataPath(this.folder), Extension.PB);
+        this.randomAccessFileService = this.journal.openFile(Journal.DATA_FILE);
         this.pageCache.clear();
         this.pageCount = this.countPages();
         this.loadFileHeader();
@@ -921,6 +1189,7 @@ public class PBStorageProvider implements Closeable {
         this.writeFileHeader();
         this.pageCount = 0;
         this.pageCache.clear();
+        this.onCleared();
     }
 
     private void createNewPage(byte[] data) throws Exception {

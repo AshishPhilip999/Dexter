@@ -40,9 +40,36 @@ public final class IndexFile {
     }
 
     public IndexFile(String path, Extension extension, int cachePages) throws Exception {
-        this.file = new RandomAccessFileService(path, extension);
-        this.cache = new LruCache<>(cachePages);
+        this(new RandomAccessFileService(path, extension), cachePages);
+    }
 
+    /*
+    An index stored in an already open file, e.g. one written through the
+    storage's journal.
+    */
+    public IndexFile(RandomAccessFileService file, int cachePages) throws Exception {
+        this.file = file;
+        this.cache = new LruCache<>(cachePages);
+        this.loadHeader();
+    }
+
+    /*
+    Drops every cached node and reads the header again, e.g. after an
+    operation that changed nodes was rolled back.
+    */
+    public void reload() throws Exception {
+        this.cache.clear();
+        this.loadHeader();
+    }
+
+    /*
+    Flushes the index file to disk.
+    */
+    public void force() throws Exception {
+        this.file.force();
+    }
+
+    private void loadHeader() throws Exception {
         long length = this.file.length();
         if (length == 0) {
             this.resetState();
@@ -72,13 +99,13 @@ public final class IndexFile {
     }
 
     /*
-    Drops every tree and page. The data file id is kept.
+    Drops every tree and page. The data file id becomes 0 (matches no data
+    file), so an index left half-built by a crash is rebuilt on the next open;
+    set the real id with setDataFileId once the index is complete.
     */
     public void clear() throws Exception {
         this.file.truncate();
-        long id = this.dataFileId;
         this.resetState();
-        this.dataFileId = id;
         this.cache.clear();
         this.writeHeader();
     }

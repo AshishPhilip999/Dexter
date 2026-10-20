@@ -84,6 +84,7 @@ public class CompactionTests {
     Makes the data file look like one written before dead bytes were tracked.
     */
     private static void eraseStatsFromHeader(String path) throws Exception {
+        released(path);   // closed first, so its journal can't write the header back
         try (RandomAccessFile file = new RandomAccessFile(datFile(path), "rw")) {
             file.seek(STATS_MARKER_OFFSET);
             file.write(new byte[12]);
@@ -386,6 +387,7 @@ public class CompactionTests {
         for (int k = 0; k < total - 50; k++) {
             ksp.delete(k);
         }
+        checkpointIfOpen(path);
         long indexBefore = indexFile(path).length();
 
         assertSuccess(ksp.compact());
@@ -482,7 +484,7 @@ public class CompactionTests {
             names.add(file.getName());
         }
         names.sort(null);
-        assertEquals(List.of("data.pb", "dex.lock", "index.pbi"), names);
+        assertEquals(List.of("data.pb", "dex.lock", "index.pbi", "journal.wal"), names);
     }
 
     // ---- interrupted compaction ----------------------------------------------------
@@ -510,9 +512,11 @@ public class CompactionTests {
             ksp.delete(k);
         }
         Path oldIndex = dir.resolve("old-index.pbi");
+        checkpointIfOpen(path);
         Files.copy(indexFile(path).toPath(), oldIndex);
 
         assertSuccess(ksp.compact());
+        released(path);
         // Simulate dying right after the rename: the index still describes the old file.
         Files.copy(oldIndex, indexFile(path).toPath(), StandardCopyOption.REPLACE_EXISTING);
 
