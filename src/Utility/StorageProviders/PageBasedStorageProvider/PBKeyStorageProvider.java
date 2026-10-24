@@ -6,11 +6,12 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Map;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.Constants.Extension;
 import Utility.Encoding.KeyCodec;
+import Utility.StorageProviders.DexterKeyFileService;
 import Utility.StorageProviders.PageBasedStorageProvider.Index.BPlusTree;
 import Utility.StorageProviders.PageBasedStorageProvider.Index.IndexFile;
 import Utility.StorageProviders.PageBasedStorageProvider.Journal.Journal;
@@ -50,7 +51,7 @@ key type throws IllegalStateException. The generic K makes a wrong key a
 compile error; the Class<K> argument keeps the type at runtime so raw-typed /
 unchecked callers are still rejected.
 */
-public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvider {
+public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvider implements DexterKeyFileService<K> {
     /*
     Largest encoded key the index accepts (KEY_TOO_LARGE above this).
     */
@@ -246,44 +247,44 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     the last page, or to a new page if that one is full. The key index then
     points the key at it. Writing an existing key stores the new record first,
     then marks the old slot as deleted (upsert).
-    SUCCESS: PBSuccess.WRITE, result.getData() holds the written data
+    SUCCESS: SPSuccess.WRITE, result.getData() holds the written data
     FAIL:    NULL_KEY, KEY_TYPE_MISMATCH, NULL_WRITE, KEY_ENCODE_ERROR,
              KEY_TOO_LARGE, DATA_TOO_LARGE, WRITE_ERROR
     */
-    public PBResult write(K key, byte[] data) {
-        PBFail invalidKey = this.validateKey(key);
+    public SPResult write(K key, byte[] data) {
+        SPFail invalidKey = this.validateKey(key);
         if (invalidKey != null) {
-            return PBResult.of(invalidKey);
+            return SPResult.of(invalidKey);
         }
         if (data == null || data.length == 0) {
-            return PBResult.of(PBFail.NULL_WRITE);
+            return SPResult.of(SPFail.NULL_WRITE);
         }
 
         byte[] keyBytes;
         try {
             keyBytes = KeyCodec.encode(key);
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.KEY_ENCODE_ERROR, e);
+            return SPResult.ofError(SPFail.KEY_ENCODE_ERROR, e);
         }
         if (keyBytes.length > MAX_KEY_BYTES) {
-            return PBResult.of(PBFail.KEY_TOO_LARGE);
+            return SPResult.of(SPFail.KEY_TOO_LARGE);
         }
 
-        PBFail invalidRecord = this.validateRecord(keyBytes.length, data);
+        SPFail invalidRecord = this.validateRecord(keyBytes.length, data);
         if (invalidRecord != null) {
-            return PBResult.of(invalidRecord);
+            return SPResult.of(invalidRecord);
         }
 
         try {
             this.repairIfNeeded();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.WRITE_ERROR, e);
+            return SPResult.ofError(SPFail.WRITE_ERROR, e);
         }
 
         this.writeLock().lock();
         try {
             if (this.isClosed()) {
-                return PBResult.of(PBFail.STORAGE_CLOSED);
+                return SPResult.of(SPFail.STORAGE_CLOSED);
             }
             RecordID placed = this.placeRecord(keyBytes, data);
             byte[] previous = this.keyIndex.put(keyBytes, encodeRecordID(placed));
@@ -294,43 +295,43 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
             this.commitOperation();
         } catch (Exception e) {
             this.rollbackOperation(e);
-            return PBResult.ofError(PBFail.WRITE_ERROR, e);
+            return SPResult.ofError(SPFail.WRITE_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
 
-        return PBResult.of(PBSuccess.WRITE, data);
+        return SPResult.of(SPSuccess.WRITE, data);
     }
 
     /*
     Reads the data written against a key: index lookup, then the data page.
-    SUCCESS: PBSuccess.READ, result.getData() holds the record
+    SUCCESS: SPSuccess.READ, result.getData() holds the record
     FAIL:    NULL_KEY, KEY_TYPE_MISMATCH, KEY_NOT_FOUND, READ_ERROR
     */
-    public PBResult read(K key) {
-        PBFail invalidKey = this.validateKey(key);
+    public SPResult read(K key) {
+        SPFail invalidKey = this.validateKey(key);
         if (invalidKey != null) {
-            return PBResult.of(invalidKey);
+            return SPResult.of(invalidKey);
         }
 
         byte[] keyBytes = this.encodeForLookup(key);
         if (keyBytes == null) {
-            return PBResult.of(PBFail.KEY_NOT_FOUND);
+            return SPResult.of(SPFail.KEY_NOT_FOUND);
         }
         try {
             this.repairIfNeeded();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.READ_ERROR, e);
+            return SPResult.ofError(SPFail.READ_ERROR, e);
         }
 
         this.readLock().lock();
         try {
             if (this.isClosed()) {
-                return PBResult.of(PBFail.STORAGE_CLOSED);
+                return SPResult.of(SPFail.STORAGE_CLOSED);
             }
             byte[] location = this.keyIndex.get(keyBytes);
             if (location == null) {
-                return PBResult.of(PBFail.KEY_NOT_FOUND);
+                return SPResult.of(SPFail.KEY_NOT_FOUND);
             }
 
             RecordID recordID = decodeRecordID(location);
@@ -339,16 +340,16 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
                 String problem = slot == null ? "does not exist"
                     : slot.isDeleted() ? "is deleted"
                     : "holds a key of " + slot.getKeyLength() + " bytes, not " + keyBytes.length;
-                return PBResult.ofError(PBFail.READ_ERROR, damagedIndex(recordID, problem));
+                return SPResult.ofError(SPFail.READ_ERROR, damagedIndex(recordID, problem));
             }
 
             byte[] record = this.readRecord(slot);
             if (!Arrays.equals(record, 0, keyBytes.length, keyBytes, 0, keyBytes.length)) {
-                return PBResult.ofError(PBFail.READ_ERROR, damagedIndex(recordID, "holds a different key"));
+                return SPResult.ofError(SPFail.READ_ERROR, damagedIndex(recordID, "holds a different key"));
             }
-            return PBResult.of(PBSuccess.READ, Arrays.copyOfRange(record, keyBytes.length, record.length));
+            return SPResult.of(SPSuccess.READ, Arrays.copyOfRange(record, keyBytes.length, record.length));
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.READ_ERROR, e);
+            return SPResult.ofError(SPFail.READ_ERROR, e);
         } finally {
             this.readLock().unlock();
         }
@@ -358,79 +359,79 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     Every live record (all keys), one entry per record in page and slot order,
     each deserializable back into its own object. Overrides the parent's
     read(), which returns only the first record.
-    SUCCESS: PBSuccess.READ, result.getDataArray() holds the records
+    SUCCESS: SPSuccess.READ, result.getDataArray() holds the records
     FAIL:    NULL_READ (nothing stored), READ_ERROR
     */
     @Override
-    public PBResult read() {
+    public SPResult read() {
         try {
             this.repairIfNeeded();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.READ_ERROR, e);
+            return SPResult.ofError(SPFail.READ_ERROR, e);
         }
 
         byte[][] records;
         this.readLock().lock();
         try {
             if (this.isClosed()) {
-                return PBResult.of(PBFail.STORAGE_CLOSED);
+                return SPResult.of(SPFail.STORAGE_CLOSED);
             }
             records = this.readAllRecords();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.READ_ERROR, e);
+            return SPResult.ofError(SPFail.READ_ERROR, e);
         } finally {
             this.readLock().unlock();
         }
 
         if (records.length == 0) {
-            return PBResult.of(PBFail.NULL_READ);
+            return SPResult.of(SPFail.NULL_READ);
         }
-        return PBResult.ofAll(PBSuccess.READ, records);
+        return SPResult.ofAll(SPSuccess.READ, records);
     }
 
     /*
     Deletes the record of one key: the key leaves the index, and its slot is
     marked deleted and becomes reusable by later writes. Both happen or
     neither does.
-    SUCCESS: PBSuccess.DELETE
+    SUCCESS: SPSuccess.DELETE
     FAIL:    NULL_KEY, KEY_TYPE_MISMATCH, KEY_NOT_FOUND, DELETE_ERROR
     */
-    public PBResult delete(K key) {
-        PBFail invalidKey = this.validateKey(key);
+    public SPResult delete(K key) {
+        SPFail invalidKey = this.validateKey(key);
         if (invalidKey != null) {
-            return PBResult.of(invalidKey);
+            return SPResult.of(invalidKey);
         }
 
         byte[] keyBytes = this.encodeForLookup(key);
         if (keyBytes == null) {
-            return PBResult.of(PBFail.KEY_NOT_FOUND);
+            return SPResult.of(SPFail.KEY_NOT_FOUND);
         }
 
         try {
             this.repairIfNeeded();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.DELETE_ERROR, e);
+            return SPResult.ofError(SPFail.DELETE_ERROR, e);
         }
 
         this.writeLock().lock();
         try {
             if (this.isClosed()) {
-                return PBResult.of(PBFail.STORAGE_CLOSED);
+                return SPResult.of(SPFail.STORAGE_CLOSED);
             }
             byte[] location = this.keyIndex.remove(keyBytes);
             if (location == null) {
-                return PBResult.of(PBFail.KEY_NOT_FOUND);
+                return SPResult.of(SPFail.KEY_NOT_FOUND);
             }
             this.markSlotDeleted(decodeRecordID(location));
             this.commitOperation();
         } catch (Exception e) {
             this.rollbackOperation(e);
-            return PBResult.ofError(PBFail.DELETE_ERROR, e);
+            return SPResult.ofError(SPFail.DELETE_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
 
-        return PBResult.of(PBSuccess.DELETE);
+        return SPResult.of(SPSuccess.DELETE);
     }
 
 
@@ -578,12 +579,12 @@ public class PBKeyStorageProvider<K extends Serializable> extends PBStorageProvi
     /*
     Returns the failure for an invalid key, or null if the key is valid.
     */
-    private PBFail validateKey(K key) {
+    private SPFail validateKey(K key) {
         if (key == null) {
-            return PBFail.NULL_KEY;
+            return SPFail.NULL_KEY;
         }
         if (!this.keyType.isInstance(key)) {
-            return PBFail.KEY_TYPE_MISMATCH;
+            return SPFail.KEY_TYPE_MISMATCH;
         }
         return null;
     }

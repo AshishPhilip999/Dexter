@@ -10,9 +10,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 import Utility.Serialization.Serializer;
@@ -40,14 +40,14 @@ public class PBSPReadTests {
     @Test
     public void readOnNewStorageReturnsNullRead() throws Exception {
         PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
-        assertFail(PBFail.NULL_READ, sp.read());
+        assertFail(SPFail.NULL_READ, sp.read());
     }
 
     @Test
     public void readOnReopenedEmptyStorageReturnsNullRead() throws Exception {
         String path = storagePath(dir, "sp");
         track(new PBStorageProvider(released(path)));
-        assertFail(PBFail.NULL_READ, track(new PBStorageProvider(released(path))).read());
+        assertFail(SPFail.NULL_READ, track(new PBStorageProvider(released(path))).read());
     }
 
     @Test
@@ -56,9 +56,9 @@ public class PBSPReadTests {
         byte[] payload = bytes(50, 3);
         sp.write(payload);
 
-        PBResult status = sp.read();
+        SPResult status = sp.read();
 
-        assertEquals(PBSuccess.READ, status.getStatus());
+        assertEquals(SPSuccess.READ, status.getStatus());
         assertSuccess(status);
         assertArrayEquals(payload, data(status));
         assertNull(dataArray(status));
@@ -113,7 +113,7 @@ public class PBSPReadTests {
         PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         sp.write(bytes(10, 1));
         sp.delete();
-        assertFail(PBFail.NULL_READ, sp.read());
+        assertFail(SPFail.NULL_READ, sp.read());
     }
 
     @Test

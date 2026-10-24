@@ -9,9 +9,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 
 public class PBKSPDeleteTests {
@@ -34,9 +34,9 @@ public class PBKSPDeleteTests {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
 
-        PBResult status = ksp.delete(1);
+        SPResult status = ksp.delete(1);
 
-        assertEquals(PBSuccess.DELETE, status.getStatus());
+        assertEquals(SPSuccess.DELETE, status.getStatus());
         assertSuccess(status);
     }
 
@@ -48,7 +48,7 @@ public class PBKSPDeleteTests {
 
         ksp.delete(1);
 
-        assertFail(PBFail.KEY_NOT_FOUND, ksp.read(1));
+        assertFail(SPFail.KEY_NOT_FOUND, ksp.read(1));
         assertFalse(ksp.containsKey(1));
         assertArrayEquals(bytes(10, 2), data(ksp.read(2)));
     }
@@ -57,12 +57,12 @@ public class PBKSPDeleteTests {
     public void deleteUnknownKeyReturnsKeyNotFound() throws Exception {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
-        assertFail(PBFail.KEY_NOT_FOUND, ksp.delete(2));
+        assertFail(SPFail.KEY_NOT_FOUND, ksp.delete(2));
     }
 
     @Test
     public void deleteKeyOnEmptyStorageReturnsKeyNotFound() throws Exception {
-        assertFail(PBFail.KEY_NOT_FOUND, newStorage().delete(1));
+        assertFail(SPFail.KEY_NOT_FOUND, newStorage().delete(1));
     }
 
     @Test
@@ -70,13 +70,13 @@ public class PBKSPDeleteTests {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
 
-        assertEquals(PBSuccess.DELETE, ksp.delete(1).getStatus());
-        assertFail(PBFail.KEY_NOT_FOUND, ksp.delete(1));
+        assertEquals(SPSuccess.DELETE, ksp.delete(1).getStatus());
+        assertFail(SPFail.KEY_NOT_FOUND, ksp.delete(1));
     }
 
     @Test
     public void deleteNullKeyFails() throws Exception {
-        assertFail(PBFail.NULL_KEY, newStorage().delete(null));
+        assertFail(SPFail.NULL_KEY, newStorage().delete(null));
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
@@ -85,7 +85,7 @@ public class PBKSPDeleteTests {
         PBKeyStorageProvider raw = newStorage();
         raw.write(1, bytes(10, 1));
 
-        assertFail(PBFail.KEY_TYPE_MISMATCH, raw.delete("1"));
+        assertFail(SPFail.KEY_TYPE_MISMATCH, raw.delete("1"));
         assertTrue(raw.containsKey(1));
     }
 
@@ -98,7 +98,7 @@ public class PBKSPDeleteTests {
         ksp.delete(1);
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(1));
         assertArrayEquals(bytes(10, 2), data(reopened.read(2)));
         assertEquals(1, dataArray(reopened.read()).length);
     }
@@ -121,7 +121,7 @@ public class PBKSPDeleteTests {
         ksp.write(1, bytes(10, 1));
         ksp.delete(1);
 
-        assertFail(PBFail.NULL_READ, ksp.read());
+        assertFail(SPFail.NULL_READ, ksp.read());
     }
 
     @Test
@@ -133,8 +133,8 @@ public class PBKSPDeleteTests {
         ksp.delete(1);
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
-        assertFail(PBFail.NULL_READ, reopened.read());
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(1));
+        assertFail(SPFail.NULL_READ, reopened.read());
     }
 
     @Test
@@ -145,13 +145,13 @@ public class PBKSPDeleteTests {
             ksp.write(i, bytes(50, i));
         }
         for (int i = 0; i < 200; i += 2) {
-            assertEquals(PBSuccess.DELETE, ksp.delete(i).getStatus());
+            assertEquals(SPSuccess.DELETE, ksp.delete(i).getStatus());
         }
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         for (int i = 0; i < 200; i++) {
             if (i % 2 == 0) {
-                assertFail(PBFail.KEY_NOT_FOUND, reopened.read(i));
+                assertFail(SPFail.KEY_NOT_FOUND, reopened.read(i));
             } else {
                 assertArrayEquals(bytes(50, i), data(reopened.read(i)));
             }
@@ -165,12 +165,12 @@ public class PBKSPDeleteTests {
     public void deleteAllReturnsDelete() throws Exception {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
-        assertEquals(PBSuccess.DELETE, ksp.delete().getStatus());
+        assertEquals(SPSuccess.DELETE, ksp.delete().getStatus());
     }
 
     @Test
     public void deleteAllOnEmptyStorageSucceeds() throws Exception {
-        assertEquals(PBSuccess.DELETE, newStorage().delete().getStatus());
+        assertEquals(SPSuccess.DELETE, newStorage().delete().getStatus());
     }
 
     @Test
@@ -182,9 +182,9 @@ public class PBKSPDeleteTests {
 
         ksp.delete();
 
-        assertFail(PBFail.NULL_READ, ksp.read());
+        assertFail(SPFail.NULL_READ, ksp.read());
         for (int i = 0; i < 10; i++) {
-            assertFail(PBFail.KEY_NOT_FOUND, ksp.read(i));
+            assertFail(SPFail.KEY_NOT_FOUND, ksp.read(i));
             assertFalse(ksp.containsKey(i));
         }
     }
@@ -211,7 +211,7 @@ public class PBKSPDeleteTests {
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertEquals(Integer.class, reopened.getKeyType());
-        assertFail(PBFail.NULL_READ, reopened.read());
+        assertFail(SPFail.NULL_READ, reopened.read());
         assertThrows(IllegalStateException.class, () -> track(new PBKeyStorageProvider<>(released(path), String.class)));
     }
 
@@ -225,7 +225,7 @@ public class PBKSPDeleteTests {
         assertSuccess(ksp.write(2, bytes(10, 2)));
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(1));
         assertArrayEquals(bytes(10, 2), data(reopened.read(2)));
         assertEquals(lengthForPages(1), fileLength(path));
     }

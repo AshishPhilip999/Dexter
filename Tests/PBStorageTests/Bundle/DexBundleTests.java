@@ -14,7 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
+import StorageStatus.SP.SPFail;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 
@@ -108,7 +108,7 @@ public class DexBundleTests {
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(moved.toString()), Integer.class));
         assertArrayEquals(bytes(10, 999), data(reopened.read(999)));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(5));
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(5));
         assertEquals(999, dataArray(reopened.read()).length);
     }
 
@@ -126,7 +126,7 @@ public class DexBundleTests {
 
         PBKeyStorageProvider<Integer> untouched = track(new PBKeyStorageProvider<>(released(original), Integer.class));
         assertArrayEquals(bytes(10, 1), data(untouched.read(1)));
-        assertFail(PBFail.KEY_NOT_FOUND, untouched.read(2));
+        assertFail(SPFail.KEY_NOT_FOUND, untouched.read(2));
         assertArrayEquals(bytes(10, 2), data(track(new PBKeyStorageProvider<>(released(copy), Integer.class)).read(1)));
     }
 
@@ -140,7 +140,7 @@ public class DexBundleTests {
         }
 
         PBKeyStorageProvider<Integer> fresh = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertFail(PBFail.NULL_READ, fresh.read());
+        assertFail(SPFail.NULL_READ, fresh.read());
     }
 
     // ---- files from before .dex folders --------------------------------------
@@ -179,7 +179,7 @@ public class DexBundleTests {
         assertArrayEquals(new String[] { "legacy.dex" }, namesIn(dir.toFile()), "loose files moved, none left behind");
         assertArrayEquals(new String[] { "data.pb", "dex.lock", "index.pbi", "journal.wal" }, namesIn(dexFolder(path)));
         assertArrayEquals(bytes(10, 499), data(opened.read(499)));
-        assertFail(PBFail.KEY_NOT_FOUND, opened.read(7));
+        assertFail(SPFail.KEY_NOT_FOUND, opened.read(7));
     }
 
     @Test

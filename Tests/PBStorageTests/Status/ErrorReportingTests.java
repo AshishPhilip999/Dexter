@@ -16,14 +16,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 
 /*
-Failures caused by an exception carry it in PBResult.getError(). Each test
+Failures caused by an exception carry it in SPResult.getError(). Each test
 causes a real failure (a corrupt page, a damaged index, a blocked temp file)
 and checks the reported cause.
 */
@@ -57,7 +57,7 @@ public class ErrorReportingTests {
         }
     }
 
-    private static void assertCause(PBFail expected, Class<? extends Exception> causeType, String messagePart, PBResult result) {
+    private static void assertCause(SPFail expected, Class<? extends Exception> causeType, String messagePart, SPResult result) {
         assertFail(expected, result);
         assertNotNull(result.getError(), "no cause reported for " + result);
         assertTrue(causeType.isInstance(result.getError()), "cause was " + result.getError());
@@ -74,8 +74,8 @@ public class ErrorReportingTests {
         corruptPage(path, 0);
 
         PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertCause(PBFail.READ_ERROR, IllegalStateException.class, "Corrupt", ksp.read(3));
-        assertCause(PBFail.READ_ERROR, IllegalStateException.class, "Corrupt", ksp.read());
+        assertCause(SPFail.READ_ERROR, IllegalStateException.class, "Corrupt", ksp.read(3));
+        assertCause(SPFail.READ_ERROR, IllegalStateException.class, "Corrupt", ksp.read());
     }
 
     @Test
@@ -84,7 +84,7 @@ public class ErrorReportingTests {
         track(new PBStorageProvider(released(path))).write(bytes(50, 1));
         corruptPage(path, 0);
 
-        assertCause(PBFail.READ_ERROR, IllegalStateException.class, "Corrupt", track(new PBStorageProvider(released(path))).read());
+        assertCause(SPFail.READ_ERROR, IllegalStateException.class, "Corrupt", track(new PBStorageProvider(released(path))).read());
     }
 
     @Test
@@ -94,7 +94,7 @@ public class ErrorReportingTests {
         corruptPage(path, 0);
 
         PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertCause(PBFail.WRITE_ERROR, IllegalStateException.class, "Corrupt", ksp.write(50, bytes(10, 1)));
+        assertCause(SPFail.WRITE_ERROR, IllegalStateException.class, "Corrupt", ksp.write(50, bytes(10, 1)));
     }
 
     @Test
@@ -104,16 +104,16 @@ public class ErrorReportingTests {
         corruptPage(path, 0);
 
         PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertCause(PBFail.DELETE_ERROR, IllegalStateException.class, "Corrupt", ksp.delete(4));
+        assertCause(SPFail.DELETE_ERROR, IllegalStateException.class, "Corrupt", ksp.delete(4));
     }
 
     @Test
     public void keyThatCannotBeEncodedReportsWhy() throws Exception {
         PBKeyStorageProvider<BadKey> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "bad")), BadKey.class));
 
-        PBResult result = ksp.write(new BadKey(), bytes(5, 1));
+        SPResult result = ksp.write(new BadKey(), bytes(5, 1));
 
-        assertFail(PBFail.KEY_ENCODE_ERROR, result);
+        assertFail(SPFail.KEY_ENCODE_ERROR, result);
         assertTrue(result.getError() instanceof NotSerializableException, "cause was " + result.getError());
     }
 
@@ -135,11 +135,11 @@ public class ErrorReportingTests {
         Files.copy(savedIndex, indexFile(path).toPath(), StandardCopyOption.REPLACE_EXISTING);
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertCause(PBFail.READ_ERROR, IllegalStateException.class, "is deleted", reopened.read(2));
+        assertCause(SPFail.READ_ERROR, IllegalStateException.class, "is deleted", reopened.read(2));
         assertTrue(reopened.read(2).getError().getMessage().contains("reconstructKeyIndex"));
 
         reopened.reconstructKeyIndex();
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(2));
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(2));
         assertNull(reopened.read(2).getError());
     }
 
@@ -165,9 +165,9 @@ public class ErrorReportingTests {
         }
         blockTempFile(path);
 
-        PBResult result = ksp.compact();
+        SPResult result = ksp.compact();
 
-        assertFail(PBFail.COMPACT_ERROR, result);
+        assertFail(SPFail.COMPACT_ERROR, result);
         assertTrue(result.getError() instanceof FileNotFoundException,
             "the cause, not the failed clean-up: " + result.getError());
         assertEquals(1, result.getError().getSuppressed().length, "the failed clean-up is attached");
@@ -184,13 +184,13 @@ public class ErrorReportingTests {
         long deadBefore = ksp.getDeadBytes();
         File blocker = blockTempFile(path);
 
-        assertFail(PBFail.COMPACT_ERROR, ksp.compact());
+        assertFail(SPFail.COMPACT_ERROR, ksp.compact());
 
         assertEquals(sizeBefore, fileLength(path));
         assertEquals(deadBefore, ksp.getDeadBytes());
         for (int k = 0; k < 200; k++) {
             if (k % 2 == 0) {
-                assertFail(PBFail.KEY_NOT_FOUND, ksp.read(k));
+                assertFail(SPFail.KEY_NOT_FOUND, ksp.read(k));
             } else {
                 assertArrayEquals(bytes(100, k), data(ksp.read(k)));
             }
@@ -199,8 +199,8 @@ public class ErrorReportingTests {
 
         assertTrue(new File(blocker, "inside").delete());
         assertTrue(blocker.delete());
-        PBResult retried = ksp.compact();
-        assertEquals(PBSuccess.COMPACT, retried.getStatus());
+        SPResult retried = ksp.compact();
+        assertEquals(SPSuccess.COMPACT, retried.getStatus());
         assertNull(retried.getError());
         assertArrayEquals(bytes(10, 5), data(ksp.read(500)));
     }

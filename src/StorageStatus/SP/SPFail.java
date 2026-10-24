@@ -1,6 +1,6 @@
-package StorageStatus.PB;
+package StorageStatus.SP;
 
-public enum PBFail implements PBStatus {
+public enum SPFail implements SPStatus {
     /*
     read() on a storage with nothing stored.
     */
@@ -79,6 +79,31 @@ public enum PBFail implements PBStatus {
     is lost: the journal keeps every change and the next checkpoint (or the
     next open) applies it again.
     */
-    CHECKPOINT_ERROR
+    CHECKPOINT_ERROR,
+
+    /*
+    Container: the write would take the container past its maxLength or
+    maxSize. Nothing was written.
+    */
+    LIMIT_EXCEEDED,
+
+    /*
+    Container: the value could not be serialized (e.g. it has a field that
+    isn't Serializable). getError() has the cause.
+    */
+    SERIALIZE_ERROR,
+
+    /*
+    Container: the value isn't of the container's value type (only possible
+    from raw-typed or unchecked code).
+    */
+    VALUE_TYPE_MISMATCH,
+
+    /*
+    Container: stored bytes could not be turned back into the container's
+    value type (not a serialized object, a class that changed, or a value of
+    another type). getError() has the cause.
+    */
+    DESERIALIZE_ERROR
     ;
 }

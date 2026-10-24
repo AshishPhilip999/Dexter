@@ -9,9 +9,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 import Utility.Serialization.Serializer;
@@ -30,9 +30,9 @@ public class PBSPWriteTests {
         PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
         byte[] payload = { 1, 2, 3 };
 
-        PBResult status = sp.write(payload);
+        SPResult status = sp.write(payload);
 
-        assertEquals(PBSuccess.WRITE, status.getStatus());
+        assertEquals(SPSuccess.WRITE, status.getStatus());
         assertSuccess(status);
         assertArrayEquals(payload, data(status));
         assertNull(dataArray(status));
@@ -41,13 +41,13 @@ public class PBSPWriteTests {
     @Test
     public void writeNullDataFails() throws Exception {
         PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
-        assertFail(PBFail.NULL_WRITE, sp.write(null));
+        assertFail(SPFail.NULL_WRITE, sp.write(null));
     }
 
     @Test
     public void writeEmptyDataFails() throws Exception {
         PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
-        assertFail(PBFail.NULL_WRITE, sp.write(new byte[0]));
+        assertFail(SPFail.NULL_WRITE, sp.write(new byte[0]));
     }
 
     @Test
@@ -64,7 +64,7 @@ public class PBSPWriteTests {
     @Test
     public void writeOneByteOverMaxRecordSizeFails() throws Exception {
         PBStorageProvider sp = track(new PBStorageProvider(released(storagePath(dir, "sp"))));
-        assertFail(PBFail.DATA_TOO_LARGE, sp.write(bytes(MAX_RECORD + 1, 7)));
+        assertFail(SPFail.DATA_TOO_LARGE, sp.write(bytes(MAX_RECORD + 1, 7)));
     }
 
     @Test
@@ -136,7 +136,7 @@ public class PBSPWriteTests {
         assertSuccess(track(new PBStorageProvider(released(path))).write(bytes(3, 9)));
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(0));
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(0));
         byte[][] records = dataArray(reopened.read());
         assertEquals(1, records.length);
         assertArrayEquals(bytes(3, 9), records[0]);

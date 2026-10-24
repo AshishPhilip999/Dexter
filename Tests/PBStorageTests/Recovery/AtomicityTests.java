@@ -12,9 +12,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.RecordID;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.Slot;
@@ -88,7 +88,7 @@ public class AtomicityTests {
         }
         for (int k = 0; k < keys; k++) {
             if (gone.contains(k)) {
-                assertFail(PBFail.KEY_NOT_FOUND, storage.read(k));
+                assertFail(SPFail.KEY_NOT_FOUND, storage.read(k));
             } else {
                 assertArrayEquals(bytes(50, k), data(storage.read(k)), "key " + k);
             }
@@ -109,8 +109,8 @@ public class AtomicityTests {
         long dead = storage.getDeadBytes();
 
         storage.failFree = true;
-        PBResult result = storage.delete(5);
-        assertFail(PBFail.DELETE_ERROR, result);
+        SPResult result = storage.delete(5);
+        assertFail(SPFail.DELETE_ERROR, result);
         assertTrue(result.getError().getMessage().contains("injected"));
 
         assertKeys(storage, 40);
@@ -129,7 +129,7 @@ public class AtomicityTests {
         long size = storage.getFileSize();
 
         storage.failFree = true;
-        assertFail(PBFail.WRITE_ERROR, storage.write(7, bytes(80, 99)));
+        assertFail(SPFail.WRITE_ERROR, storage.write(7, bytes(80, 99)));
 
         assertKeys(storage, 40);
         assertEquals(size, storage.getFileSize(), "the new record's space is given back");
@@ -143,10 +143,10 @@ public class AtomicityTests {
         long size = storage.getFileSize();
 
         storage.failTake = true;
-        assertFail(PBFail.WRITE_ERROR, storage.write(100, bytes(50, 1)));
+        assertFail(SPFail.WRITE_ERROR, storage.write(100, bytes(50, 1)));
         storage.failTake = false;
 
-        assertFail(PBFail.KEY_NOT_FOUND, storage.read(100));
+        assertFail(SPFail.KEY_NOT_FOUND, storage.read(100));
         assertEquals(size, storage.getFileSize());
         assertKeys(reopen(path), 40);
     }
@@ -157,8 +157,8 @@ public class AtomicityTests {
         Faulty storage = faulty(path, 40);
 
         storage.failClear = true;
-        assertFail(PBFail.DELETE_ERROR, storage.delete());
-        assertFail(PBFail.WRITE_ERROR, storage.write(bytes(20, 1)));
+        assertFail(SPFail.DELETE_ERROR, storage.delete());
+        assertFail(SPFail.WRITE_ERROR, storage.write(bytes(20, 1)));
         storage.failClear = false;
 
         assertKeys(storage, 40);
@@ -178,7 +178,7 @@ public class AtomicityTests {
             storage.failFree = fail;
             storage.failTake = fail && random.nextBoolean();
             if (random.nextInt(3) == 0) {
-                PBResult r = storage.delete(k);
+                SPResult r = storage.delete(k);
                 if (r.hasSucceeded()) {
                     expected.remove(k);
                 }
@@ -197,7 +197,7 @@ public class AtomicityTests {
                 if (expected.containsKey(k)) {
                     assertArrayEquals(expected.get(k), data(s.read(k)), "key " + k);
                 } else {
-                    assertFail(PBFail.KEY_NOT_FOUND, s.read(k));
+                    assertFail(SPFail.KEY_NOT_FOUND, s.read(k));
                 }
             }
         };
@@ -244,9 +244,9 @@ public class AtomicityTests {
 
     private static void assertFlakyKeys(PBKeyStorageProvider<FlakyKey> storage) {
         for (int k = 0; k < 300; k++) {
-            PBResult r = storage.read(new FlakyKey(k));
+            SPResult r = storage.read(new FlakyKey(k));
             if (k % 3 == 0) {
-                assertFail(PBFail.KEY_NOT_FOUND, r);
+                assertFail(SPFail.KEY_NOT_FOUND, r);
             } else {
                 assertArrayEquals(bytes(40, k), data(r), "key " + k);
             }
@@ -258,9 +258,9 @@ public class AtomicityTests {
         PBKeyStorageProvider<FlakyKey> storage = flakyStorage(storagePath(dir, "flaky"));
 
         FlakyKey.failDecodes = 1;     // the first rebuild fails, the retry works
-        PBResult result = storage.compact();
+        SPResult result = storage.compact();
 
-        assertEquals(PBSuccess.COMPACT, result.getStatus(), "recovered in place: " + result);
+        assertEquals(SPSuccess.COMPACT, result.getStatus(), "recovered in place: " + result);
         assertEquals(0, storage.getDeadBytes());
         assertFlakyKeys(storage);
     }
@@ -271,17 +271,17 @@ public class AtomicityTests {
         PBKeyStorageProvider<FlakyKey> storage = flakyStorage(path);
 
         FlakyKey.failDecodes = 1_000_000;   // every rebuild fails for now
-        PBResult result = storage.compact();
-        assertFail(PBFail.COMPACT_ERROR, result);
+        SPResult result = storage.compact();
+        assertFail(SPFail.COMPACT_ERROR, result);
         assertTrue(result.getError().getMessage().contains("injected"));
         assertEquals(1, result.getError().getSuppressed().length, "the retry's failure is attached");
 
         // Never a wrong answer from a stale index: an error that says why.
-        PBResult read = storage.read(new FlakyKey(1));
-        assertFail(PBFail.READ_ERROR, read);
+        SPResult read = storage.read(new FlakyKey(1));
+        assertFail(SPFail.READ_ERROR, read);
         assertTrue(read.getError().getMessage().contains("injected"));
         assertFalse(storage.containsKey(new FlakyKey(1)));
-        assertFail(PBFail.WRITE_ERROR, storage.write(new FlakyKey(1), bytes(5, 5)));
+        assertFail(SPFail.WRITE_ERROR, storage.write(new FlakyKey(1), bytes(5, 5)));
 
         FlakyKey.failDecodes = 0;           // the problem goes away
         assertFlakyKeys(storage);            // the first call rebuilds, then everything is there
@@ -310,7 +310,7 @@ public class AtomicityTests {
         PBKeyStorageProvider<FlakyKey> storage = flakyStorage(path);
 
         FlakyKey.failDecodes = 1_000_000;
-        assertFail(PBFail.COMPACT_ERROR, storage.compact());
+        assertFail(SPFail.COMPACT_ERROR, storage.compact());
         // A crash now: the index on disk is half-built and marked as matching no data file.
         String image = storagePath(dir, "image");
         CrashScript.crashImage(dexFolder(path).toPath(), dexFolder(image).toPath());

@@ -12,8 +12,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexBundle;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.PBOffSets;
@@ -21,7 +21,7 @@ import Utility.StorageProviders.PageBasedStorageProvider.Utility.PBOffSets;
 /*
 Shared helpers for the PBStorageProvider / PBKeyStorageProvider tests.
 
-Every storage call returns its own PBResult; data(...) / dataArray(...) check
+Every storage call returns its own SPResult; data(...) / dataArray(...) check
 it succeeded and return its data.
 */
 public final class PBTestUtils {
@@ -145,11 +145,11 @@ public final class PBTestUtils {
         return data;
     }
 
-    public static void assertSuccess(PBResult result) {
+    public static void assertSuccess(SPResult result) {
         assertTrue(result.hasSucceeded(), "Expected success but was " + result);
     }
 
-    public static void assertFail(PBFail expected, PBResult actual) {
+    public static void assertFail(SPFail expected, SPResult actual) {
         assertEquals(expected, actual.getStatus());
         assertFalse(actual.hasSucceeded());
     }
@@ -157,12 +157,12 @@ public final class PBTestUtils {
     /*
     Data of a successful result.
     */
-    public static byte[] data(PBResult result) {
+    public static byte[] data(SPResult result) {
         assertTrue(result.hasSucceeded(), "Expected success but was " + result);
         return result.getData();
     }
 
-    public static byte[][] dataArray(PBResult result) {
+    public static byte[][] dataArray(SPResult result) {
         assertTrue(result.hasSucceeded(), "Expected success but was " + result);
         return result.getDataArray();
     }

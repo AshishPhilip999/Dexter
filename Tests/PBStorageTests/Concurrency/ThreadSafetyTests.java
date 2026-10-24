@@ -20,9 +20,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 
@@ -126,9 +126,9 @@ public class ThreadSafetyTests {
                 Random random = new Random(seed);
                 for (int i = 0; i < 20_000; i++) {
                     int k = random.nextInt(keys);
-                    PBResult status = ksp.read(k);
-                    check(failures, status.getStatus() == PBSuccess.READ, "read(" + k + ") -> " + status);
-                    if (status.getStatus() == PBSuccess.READ) {
+                    SPResult status = ksp.read(k);
+                    check(failures, status.getStatus() == SPSuccess.READ, "read(" + k + ") -> " + status);
+                    if (status.getStatus() == SPSuccess.READ) {
                         byte[] data = status.getData();
                         check(failures, data.length == 100 && keyOf(data) == k,
                             "read(" + k + ") returned data of key " + keyOf(data));
@@ -146,9 +146,9 @@ public class ThreadSafetyTests {
         ksp.write(1, value(1, 1, 20));
         ksp.write(2, value(2, 2, 30));
 
-        PBResult first = ksp.read(1);
-        PBResult second = ksp.read(2);
-        PBResult written = ksp.write(3, value(3, 3, 40));
+        SPResult first = ksp.read(1);
+        SPResult second = ksp.read(2);
+        SPResult written = ksp.write(3, value(3, 3, 40));
 
         assertNotSame(first, second, "every call returns a new result");
         assertEquals(1, keyOf(first.getData()), "a later read doesn't change an earlier result");
@@ -165,7 +165,7 @@ public class ThreadSafetyTests {
             ksp.write(k, value(k, 1, 50));
         }
 
-        // Producers read and pass the PBResult itself to consumers, which check it.
+        // Producers read and pass the SPResult itself to consumers, which check it.
         java.util.concurrent.BlockingQueue<Object[]> queue = new java.util.concurrent.ArrayBlockingQueue<>(256);
         int producers = 4;
         int perProducer = 10_000;
@@ -185,8 +185,8 @@ public class ThreadSafetyTests {
                 for (int i = 0; i < perProducer; i++) {
                     Object[] item = queue.take();
                     int k = (Integer) item[0];
-                    PBResult result = (PBResult) item[1];
-                    check(failures, result.getStatus() == PBSuccess.READ, "read(" + k + ") -> " + result);
+                    SPResult result = (SPResult) item[1];
+                    check(failures, result.getStatus() == SPSuccess.READ, "read(" + k + ") -> " + result);
                     check(failures, result.getData() != null && keyOf(result.getData()) == k,
                         "result for key " + k + " carried another key's data");
                 }
@@ -209,10 +209,10 @@ public class ThreadSafetyTests {
             final int base = t * perThread;
             writers.add(failures -> {
                 for (int i = 0; i < perThread; i++) {
-                    check(failures, ksp.write(base + i, value(base + i, 1, 50)).getStatus() == PBSuccess.WRITE, "write " + (base + i));
+                    check(failures, ksp.write(base + i, value(base + i, 1, 50)).getStatus() == SPSuccess.WRITE, "write " + (base + i));
                 }
                 for (int i = 0; i < perThread; i += 2) {   // overwrite half, with a different size
-                    check(failures, ksp.write(base + i, value(base + i, 2, 80)).getStatus() == PBSuccess.WRITE, "overwrite " + (base + i));
+                    check(failures, ksp.write(base + i, value(base + i, 2, 80)).getStatus() == SPSuccess.WRITE, "overwrite " + (base + i));
                 }
             });
         }
@@ -244,7 +244,7 @@ public class ThreadSafetyTests {
                 Random random = new Random(writer);
                 for (int i = 0; i < 8_000; i++) {
                     int k = random.nextInt(keys);
-                    check(failures, ksp.write(k, value(k, writer, 5 + random.nextInt(300))).getStatus() == PBSuccess.WRITE, "write " + k);
+                    check(failures, ksp.write(k, value(k, writer, 5 + random.nextInt(300))).getStatus() == SPSuccess.WRITE, "write " + k);
                 }
             });
         }
@@ -254,9 +254,9 @@ public class ThreadSafetyTests {
                 Random random = new Random(seed);
                 for (int i = 0; i < 20_000; i++) {
                     int k = random.nextInt(keys);
-                    PBResult status = ksp.read(k);
-                    check(failures, status.getStatus() == PBSuccess.READ, "read(" + k + ") -> " + status);
-                    if (status.getStatus() == PBSuccess.READ) {
+                    SPResult status = ksp.read(k);
+                    check(failures, status.getStatus() == SPSuccess.READ, "read(" + k + ") -> " + status);
+                    if (status.getStatus() == SPSuccess.READ) {
                         byte[] data = status.getData();
                         check(failures, keyOf(data) == k, "read(" + k + ") returned key " + keyOf(data));
                         byte tag = data[4];
@@ -295,17 +295,17 @@ public class ThreadSafetyTests {
                 for (int i = 0; i < 6_000; i++) {
                     int k = random.nextInt(keys);
                     int op = random.nextInt(10);
-                    PBResult status;
+                    SPResult status;
                     if (op < 4) {
                         status = ksp.write(k, value(k, seed, 5 + random.nextInt(200)));
-                        check(failures, status.getStatus() == PBSuccess.WRITE, "write " + k + " -> " + status);
+                        check(failures, status.getStatus() == SPSuccess.WRITE, "write " + k + " -> " + status);
                     } else if (op < 6) {
                         status = ksp.delete(k);
-                        check(failures, status.getStatus() == PBSuccess.DELETE || status.getStatus() == PBFail.KEY_NOT_FOUND, "delete " + k + " -> " + status);
+                        check(failures, status.getStatus() == SPSuccess.DELETE || status.getStatus() == SPFail.KEY_NOT_FOUND, "delete " + k + " -> " + status);
                     } else if (op < 9) {
                         status = ksp.read(k);
-                        check(failures, status.getStatus() == PBSuccess.READ || status.getStatus() == PBFail.KEY_NOT_FOUND, "read " + k + " -> " + status);
-                        if (status.getStatus() == PBSuccess.READ) {
+                        check(failures, status.getStatus() == SPSuccess.READ || status.getStatus() == SPFail.KEY_NOT_FOUND, "read " + k + " -> " + status);
+                        if (status.getStatus() == SPSuccess.READ) {
                             check(failures, keyOf(status.getData()) == k, "read " + k + " wrong record");
                         }
                     } else {
@@ -318,15 +318,15 @@ public class ThreadSafetyTests {
 
         Set<Integer> present = new TreeSet<>();
         for (int k = 0; k < keys; k++) {
-            PBResult status = ksp.read(k);
-            assertTrue(status.getStatus() == PBSuccess.READ || status.getStatus() == PBFail.KEY_NOT_FOUND, "key " + k + " -> " + status);
-            if (status.getStatus() == PBSuccess.READ) {
+            SPResult status = ksp.read(k);
+            assertTrue(status.getStatus() == SPSuccess.READ || status.getStatus() == SPFail.KEY_NOT_FOUND, "key " + k + " -> " + status);
+            if (status.getStatus() == SPSuccess.READ) {
                 present.add(k);
                 assertTrue(ksp.containsKey(k));
             }
         }
-        PBResult all = ksp.read();
-        assertEquals(present.size(), all.getStatus() == PBFail.NULL_READ ? 0 : all.getDataArray().length,
+        SPResult all = ksp.read();
+        assertEquals(present.size(), all.getStatus() == SPFail.NULL_READ ? 0 : all.getDataArray().length,
             "read() and the index agree on how many keys are live");
 
         // Rebuilding the index from the data pages must find exactly the same keys.
@@ -353,7 +353,7 @@ public class ThreadSafetyTests {
         List<ThrowingRunnable> tasks = new ArrayList<>();
         tasks.add(failures -> {
             for (int i = 0; i < 50; i++) {
-                check(failures, ksp.delete().getStatus() == PBSuccess.DELETE, "delete()");
+                check(failures, ksp.delete().getStatus() == SPSuccess.DELETE, "delete()");
                 Thread.yield();
             }
         });
@@ -364,11 +364,11 @@ public class ThreadSafetyTests {
                 for (int i = 0; i < 10_000; i++) {
                     int k = random.nextInt(keys);
                     if (random.nextBoolean()) {
-                        check(failures, ksp.write(k, value(k, seed, 30)).getStatus() == PBSuccess.WRITE, "write");
+                        check(failures, ksp.write(k, value(k, seed, 30)).getStatus() == SPSuccess.WRITE, "write");
                     } else {
-                        PBResult status = ksp.read(k);
-                        check(failures, status.getStatus() == PBSuccess.READ || status.getStatus() == PBFail.KEY_NOT_FOUND, "read -> " + status);
-                        if (status.getStatus() == PBSuccess.READ) {
+                        SPResult status = ksp.read(k);
+                        check(failures, status.getStatus() == SPSuccess.READ || status.getStatus() == SPFail.KEY_NOT_FOUND, "read -> " + status);
+                        if (status.getStatus() == SPSuccess.READ) {
                             check(failures, keyOf(status.getData()) == k, "wrong record");
                         }
                     }
@@ -379,12 +379,12 @@ public class ThreadSafetyTests {
 
         int live = 0;
         for (int k = 0; k < keys; k++) {
-            if (ksp.read(k).getStatus() == PBSuccess.READ) {
+            if (ksp.read(k).getStatus() == SPSuccess.READ) {
                 live++;
             }
         }
-        PBResult all = track(new PBKeyStorageProvider<>(released(path), Integer.class)).read();
-        assertEquals(live, all.getStatus() == PBFail.NULL_READ ? 0 : dataArray(all).length);
+        SPResult all = track(new PBKeyStorageProvider<>(released(path), Integer.class)).read();
+        assertEquals(live, all.getStatus() == SPFail.NULL_READ ? 0 : dataArray(all).length);
     }
 
     // ---- keyless storage ------------------------------------------------------
@@ -401,16 +401,16 @@ public class ThreadSafetyTests {
                 Random random = new Random(seed);
                 for (int i = 0; i < 3_000; i++) {
                     int v = 1 + random.nextInt(250);
-                    check(failures, sp.write(bytes(1 + random.nextInt(2_000), v)).getStatus() == PBSuccess.WRITE, "write");
+                    check(failures, sp.write(bytes(1 + random.nextInt(2_000), v)).getStatus() == SPSuccess.WRITE, "write");
                 }
             });
         }
         for (int r = 0; r < 5; r++) {
             tasks.add(failures -> {
                 for (int i = 0; i < 10_000; i++) {
-                    PBResult status = sp.read();
-                    check(failures, status.getStatus() == PBSuccess.READ, "read -> " + status);
-                    if (status.getStatus() == PBSuccess.READ) {
+                    SPResult status = sp.read();
+                    check(failures, status.getStatus() == SPSuccess.READ, "read -> " + status);
+                    if (status.getStatus() == SPSuccess.READ) {
                         byte[] data = status.getData();
                         boolean uniform = true;
                         for (byte b : data) {
