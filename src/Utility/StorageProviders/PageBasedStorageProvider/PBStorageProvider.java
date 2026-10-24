@@ -15,11 +15,12 @@ import java.util.List;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.Constants.Extension;
 import Utility.FileServices.RandomAccessFileService;
+import Utility.StorageProviders.DexterFileService;
 import Utility.StorageProviders.PageBasedStorageProvider.Journal.Journal;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexBundle;
 import Utility.StorageProviders.PageBasedStorageProvider.Utility.DexLock;
@@ -43,7 +44,7 @@ until the first is closed. close() releases the lock; use try-with-resources:
         users.write(1, data);
     }
 
-After close(), every operation returns PBFail.STORAGE_CLOSED.
+After close(), every operation returns SPFail.STORAGE_CLOSED.
 
 Crash safety: every write and delete is all-or-nothing. Its changes are
 collected while it runs and committed as one record to the journal
@@ -64,7 +65,7 @@ Errors: operations never throw. A failure caused by an exception (an I/O error,
 a corrupt page) returns READ_ERROR / WRITE_ERROR / DELETE_ERROR / COMPACT_ERROR
 with that exception in result.getError().
 */
-public class PBStorageProvider implements Closeable {
+public class PBStorageProvider implements Closeable, DexterFileService {
     /*
     Data pages kept in memory at most; older ones are dropped and re-read from
     disk when needed. 1024 pages = about 4 MB of page data.
@@ -202,7 +203,7 @@ public class PBStorageProvider implements Closeable {
     Closes the files and releases the storage's lock, so it can be opened again
     (by this program or another one). Waits for operations running on other
     threads to finish. Safe to call more than once.
-    After close(), operations return PBFail.STORAGE_CLOSED, containsKey returns
+    After close(), operations return SPFail.STORAGE_CLOSED, containsKey returns
     false, getFileSize / reconstructKeyIndex throw IllegalStateException;
     getDeadBytes / getFragmentation keep their last values.
     If closing a file fails, the lock is still released and the first error is
@@ -281,7 +282,7 @@ public class PBStorageProvider implements Closeable {
     }
 
     /*
-    For methods that throw rather than return a PBResult.
+    For methods that throw rather than return a SPResult.
     */
     protected void ensureOpen() {
         if (this.closed) {
@@ -408,98 +409,98 @@ public class PBStorageProvider implements Closeable {
     /*
     Drops all existing pages (in memory and on disk) and writes a single new page
     with this data.
-    SUCCESS: PBSuccess.WRITE, result.getData() holds the written data
+    SUCCESS: SPSuccess.WRITE, result.getData() holds the written data
     FAIL:    NULL_WRITE, DATA_TOO_LARGE, WRITE_ERROR
     */
-    public PBResult write(byte[] data) {
-        PBFail invalid = this.validateRecord(0, data);
+    public SPResult write(byte[] data) {
+        SPFail invalid = this.validateRecord(0, data);
         if (invalid != null) {
-            return PBResult.of(invalid);
+            return SPResult.of(invalid);
         }
         try {
             this.repairIfNeeded();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.WRITE_ERROR, e);
+            return SPResult.ofError(SPFail.WRITE_ERROR, e);
         }
 
         this.writeLock().lock();
         try {
             if (this.closed) {
-                return PBResult.of(PBFail.STORAGE_CLOSED);
+                return SPResult.of(SPFail.STORAGE_CLOSED);
             }
             this.createNewPage(data);
             this.commitOperation();
         } catch (Exception e) {
             this.rollbackOperation(e);
-            return PBResult.ofError(PBFail.WRITE_ERROR, e);
+            return SPResult.ofError(SPFail.WRITE_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
 
-        return PBResult.of(PBSuccess.WRITE, data);
+        return SPResult.of(SPSuccess.WRITE, data);
     }
 
     /*
     Erases everything: every page and record is removed from memory and the
     file is truncated back to just its header (the stored key type is kept).
-    SUCCESS: PBSuccess.DELETE
+    SUCCESS: SPSuccess.DELETE
     FAIL:    DELETE_ERROR
     */
-    public PBResult delete() {
+    public SPResult delete() {
         try {
             this.repairIfNeeded();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.DELETE_ERROR, e);
+            return SPResult.ofError(SPFail.DELETE_ERROR, e);
         }
 
         this.writeLock().lock();
         try {
             if (this.closed) {
-                return PBResult.of(PBFail.STORAGE_CLOSED);
+                return SPResult.of(SPFail.STORAGE_CLOSED);
             }
             this.clearAll();
             this.commitOperation();
         } catch (Exception e) {
             this.rollbackOperation(e);
-            return PBResult.ofError(PBFail.DELETE_ERROR, e);
+            return SPResult.ofError(SPFail.DELETE_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
 
-        return PBResult.of(PBSuccess.DELETE);
+        return SPResult.of(SPSuccess.DELETE);
     }
 
     /*
     The data written by write(data): the first live record in the file.
-    SUCCESS: PBSuccess.READ, result.getData() holds the record
+    SUCCESS: SPSuccess.READ, result.getData() holds the record
     FAIL:    NULL_READ (nothing stored), READ_ERROR
     */
-    public PBResult read() {
+    public SPResult read() {
         try {
             this.repairIfNeeded();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.READ_ERROR, e);
+            return SPResult.ofError(SPFail.READ_ERROR, e);
         }
 
         this.readLock().lock();
         try {
             if (this.closed) {
-                return PBResult.of(PBFail.STORAGE_CLOSED);
+                return SPResult.of(SPFail.STORAGE_CLOSED);
             }
             for (int pageNumber = 0; pageNumber < this.pageCount; pageNumber++) {
                 for (Slot slot : this.getPage(pageNumber).getSlots()) {
                     if (!slot.isDeleted()) {
-                        return PBResult.of(PBSuccess.READ, this.readSlot(slot));
+                        return SPResult.of(SPSuccess.READ, this.readSlot(slot));
                     }
                 }
             }
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.READ_ERROR, e);
+            return SPResult.ofError(SPFail.READ_ERROR, e);
         } finally {
             this.readLock().unlock();
         }
 
-        return PBResult.of(PBFail.NULL_READ);
+        return SPResult.of(SPFail.NULL_READ);
     }
 
     /*
@@ -527,26 +528,26 @@ public class PBStorageProvider implements Closeable {
     more copy of it, and blocks reads and writes while it runs. Worth calling
     when getFragmentation() is high, e.g.
         if (storage.getFragmentation() > 0.5) storage.compact();
-    SUCCESS: PBSuccess.COMPACT
+    SUCCESS: SPSuccess.COMPACT
     FAIL:    COMPACT_ERROR
     */
-    public PBResult compact() {
+    public SPResult compact() {
         try {
             this.repairIfNeeded();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.COMPACT_ERROR, e);
+            return SPResult.ofError(SPFail.COMPACT_ERROR, e);
         }
 
         this.writeLock().lock();
         try {
             if (this.closed) {
-                return PBResult.of(PBFail.STORAGE_CLOSED);
+                return SPResult.of(SPFail.STORAGE_CLOSED);
             }
             try {
                 this.journal.checkpoint();
                 this.rewriteCompacted();
             } catch (Exception e) {
-                return PBResult.ofError(PBFail.COMPACT_ERROR, e);
+                return SPResult.ofError(SPFail.COMPACT_ERROR, e);
             }
 
             try {
@@ -556,36 +557,36 @@ public class PBStorageProvider implements Closeable {
                     this.onCompacted();      // once more, from scratch
                 } catch (Exception second) {
                     first.addSuppressed(second);
-                    return PBResult.ofError(PBFail.COMPACT_ERROR, first);
+                    return SPResult.ofError(SPFail.COMPACT_ERROR, first);
                 }
             }
         } finally {
             this.writeLock().unlock();
         }
 
-        return PBResult.of(PBSuccess.COMPACT);
+        return SPResult.of(SPSuccess.COMPACT);
     }
 
     /*
     Flushes the journal to disk, so every operation that returned success so
     far survives a power cut (with Durability.SYNC that is already true). Much
     cheaper than checkpoint().
-    SUCCESS: PBSuccess.SYNC
+    SUCCESS: SPSuccess.SYNC
     FAIL:    SYNC_ERROR
     */
-    public PBResult sync() {
+    public SPResult sync() {
         this.writeLock().lock();
         try {
             if (this.closed) {
-                return PBResult.of(PBFail.STORAGE_CLOSED);
+                return SPResult.of(SPFail.STORAGE_CLOSED);
             }
             this.journal.sync();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.SYNC_ERROR, e);
+            return SPResult.ofError(SPFail.SYNC_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
-        return PBResult.of(PBSuccess.SYNC);
+        return SPResult.of(SPSuccess.SYNC);
     }
 
     /*
@@ -593,22 +594,22 @@ public class PBStorageProvider implements Closeable {
     disk and empties the journal. Happens on its own every few MB of changes,
     before compact() and on close(); call it to have the files complete now
     (e.g. before copying them elsewhere).
-    SUCCESS: PBSuccess.CHECKPOINT
+    SUCCESS: SPSuccess.CHECKPOINT
     FAIL:    CHECKPOINT_ERROR (nothing is lost; the journal still has everything)
     */
-    public PBResult checkpoint() {
+    public SPResult checkpoint() {
         this.writeLock().lock();
         try {
             if (this.closed) {
-                return PBResult.of(PBFail.STORAGE_CLOSED);
+                return SPResult.of(SPFail.STORAGE_CLOSED);
             }
             this.journal.checkpoint();
         } catch (Exception e) {
-            return PBResult.ofError(PBFail.CHECKPOINT_ERROR, e);
+            return SPResult.ofError(SPFail.CHECKPOINT_ERROR, e);
         } finally {
             this.writeLock().unlock();
         }
-        return PBResult.of(PBSuccess.CHECKPOINT);
+        return SPResult.of(SPSuccess.CHECKPOINT);
     }
 
     public Durability getDurability() {
@@ -760,14 +761,14 @@ public class PBStorageProvider implements Closeable {
     Checks that data is present and key + data fit into one page.
     Returns the failure, or null if the record is valid.
     */
-    protected PBFail validateRecord(int keyLength, byte[] data) {
+    protected SPFail validateRecord(int keyLength, byte[] data) {
         if (data == null || data.length == 0) {
-            return PBFail.NULL_WRITE;
+            return SPFail.NULL_WRITE;
         }
 
         int maxRecordSize = PBOffSets.PAGE.getValue() - PBOffSets.HEADER.getValue() - PBOffSets.SLOT.getValue();
         if (keyLength + data.length > maxRecordSize) {
-            return PBFail.DATA_TOO_LARGE;
+            return SPFail.DATA_TOO_LARGE;
         }
 
         return null;

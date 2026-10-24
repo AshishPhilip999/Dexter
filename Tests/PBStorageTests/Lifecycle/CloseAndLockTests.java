@@ -23,9 +23,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.StorageInUseException;
@@ -143,12 +143,12 @@ public class CloseAndLockTests {
         ksp.close();
         assertTrue(ksp.isClosed());
 
-        List<PBResult> results = List.of(
+        List<SPResult> results = List.of(
             ksp.write(3, bytes(10, 3)), ksp.read(1), ksp.read(), ksp.delete(1),
             ksp.write(bytes(10, 4)), ksp.delete(), ksp.compact()
         );
-        for (PBResult result : results) {
-            assertFail(PBFail.STORAGE_CLOSED, result);
+        for (SPResult result : results) {
+            assertFail(SPFail.STORAGE_CLOSED, result);
             assertNull(result.getError());
         }
         assertFalse(ksp.containsKey(1));
@@ -159,7 +159,7 @@ public class CloseAndLockTests {
 
         try (PBKeyStorageProvider<Integer> again = open(path)) {
             assertArrayEquals(bytes(10, 1), data(again.read(1)), "nothing changed after close");
-            assertFail(PBFail.KEY_NOT_FOUND, again.read(3));
+            assertFail(SPFail.KEY_NOT_FOUND, again.read(3));
         }
     }
 
@@ -169,10 +169,10 @@ public class CloseAndLockTests {
         sp.write(bytes(10, 1));
         sp.close();
 
-        assertFail(PBFail.STORAGE_CLOSED, sp.read());
-        assertFail(PBFail.STORAGE_CLOSED, sp.write(bytes(10, 2)));
-        assertFail(PBFail.STORAGE_CLOSED, sp.delete());
-        assertFail(PBFail.STORAGE_CLOSED, sp.compact());
+        assertFail(SPFail.STORAGE_CLOSED, sp.read());
+        assertFail(SPFail.STORAGE_CLOSED, sp.write(bytes(10, 2)));
+        assertFail(SPFail.STORAGE_CLOSED, sp.delete());
+        assertFail(SPFail.STORAGE_CLOSED, sp.compact());
     }
 
     @Test
@@ -187,8 +187,8 @@ public class CloseAndLockTests {
     public void argumentsAreStillCheckedAfterClose() throws Exception {
         PBKeyStorageProvider<Integer> ksp = open(storagePath(dir, "ksp"));
         ksp.close();
-        assertFail(PBFail.NULL_KEY, ksp.read(null));
-        assertFail(PBFail.NULL_WRITE, ksp.write(1, null));
+        assertFail(SPFail.NULL_KEY, ksp.read(null));
+        assertFail(SPFail.NULL_WRITE, ksp.write(1, null));
     }
 
     @Test
@@ -208,8 +208,8 @@ public class CloseAndLockTests {
                 started.countDown();
                 for (int i = 0; i < 50_000; i++) {
                     int k = (i * 7 + seed) % 200;
-                    PBResult r = (i % 3 == 0) ? ksp.write(k, bytes(20, k)) : ksp.read(k);
-                    if (r.getStatus() == PBFail.STORAGE_CLOSED) {
+                    SPResult r = (i % 3 == 0) ? ksp.write(k, bytes(20, k)) : ksp.read(k);
+                    if (r.getStatus() == SPFail.STORAGE_CLOSED) {
                         return;   // expected once close() has run
                     }
                     if (!r.hasSucceeded()) {
@@ -311,7 +311,7 @@ public class CloseAndLockTests {
 
             try (PBKeyStorageProvider<Integer> mine = open(path)) {
                 assertArrayEquals(new byte[] { 42 }, data(mine.read(1)));
-                assertEquals(PBSuccess.WRITE, mine.write(2, bytes(5, 2)).getStatus());
+                assertEquals(SPSuccess.WRITE, mine.write(2, bytes(5, 2)).getStatus());
             }
         } finally {
             holder.destroyForcibly();

@@ -24,9 +24,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.Constants.Extension;
 import Utility.StorageProviders.PageBasedStorageProvider.Index.IndexFile;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
@@ -237,7 +237,7 @@ public class CompactionTests {
 
         assertEquals(FILE_HEADER, fileLength(path));
         assertEquals(0, ksp.getDeadBytes());
-        assertFail(PBFail.NULL_READ, ksp.read());
+        assertFail(SPFail.NULL_READ, ksp.read());
 
         assertSuccess(ksp.write(5, value(5, VALUE_SIZE)));
         assertArrayEquals(value(5, VALUE_SIZE), data(open(path).read(5)));
@@ -294,8 +294,8 @@ public class CompactionTests {
 
     @Test
     public void compactReturnsCompact() throws Exception {
-        PBResult result = withKeys(storagePath(dir, "ksp"), 5).compact();
-        assertEquals(PBSuccess.COMPACT, result.getStatus());
+        SPResult result = withKeys(storagePath(dir, "ksp"), 5).compact();
+        assertEquals(SPSuccess.COMPACT, result.getStatus());
         assertTrue(result.hasSucceeded());
     }
 
@@ -318,7 +318,7 @@ public class CompactionTests {
         assertEquals(0.0, ksp.getFragmentation());
         for (int k = 0; k < total; k++) {
             if (k % 2 == 0) {
-                assertFail(PBFail.KEY_NOT_FOUND, ksp.read(k));
+                assertFail(SPFail.KEY_NOT_FOUND, ksp.read(k));
                 assertFalse(ksp.containsKey(k));
             } else {
                 assertArrayEquals(value(k, VALUE_SIZE), data(ksp.read(k)), "key " + k);
@@ -413,7 +413,7 @@ public class CompactionTests {
 
         assertSuccess(ksp.compact());
         assertEquals(FILE_HEADER, fileLength(path));
-        assertFail(PBFail.NULL_READ, ksp.read());
+        assertFail(SPFail.NULL_READ, ksp.read());
 
         assertSuccess(ksp.write(1, value(1, 10)));
         assertArrayEquals(value(1, 10), data(ksp.read(1)));
@@ -465,7 +465,7 @@ public class CompactionTests {
                 if (expected.containsKey(k)) {
                     assertArrayEquals(expected.get(k), data(storage.read(k)), "key " + k);
                 } else {
-                    assertFail(PBFail.KEY_NOT_FOUND, storage.read(k));
+                    assertFail(SPFail.KEY_NOT_FOUND, storage.read(k));
                 }
             }
         };
@@ -523,7 +523,7 @@ public class CompactionTests {
         PBKeyStorageProvider<Integer> reopened = open(path);
         for (int k = 0; k < 500; k++) {
             if (k % 2 == 0) {
-                assertFail(PBFail.KEY_NOT_FOUND, reopened.read(k));
+                assertFail(SPFail.KEY_NOT_FOUND, reopened.read(k));
             } else {
                 assertArrayEquals(value(k, VALUE_SIZE), data(reopened.read(k)), "key " + k);
             }
@@ -564,16 +564,16 @@ public class CompactionTests {
                                 failures.add("write " + k);
                             }
                         } else if (op < 6) {
-                            PBResult r = ksp.delete(k);
+                            SPResult r = ksp.delete(k);
                             if (r.hasSucceeded() != model.containsKey(k)) {
                                 failures.add("delete " + k + " -> " + r);
                             }
                             model.remove(k);
                         } else {
-                            PBResult r = ksp.read(k);
+                            SPResult r = ksp.read(k);
                             byte[] want = model.get(k);
                             boolean ok = want == null
-                                ? r.getStatus() == PBFail.KEY_NOT_FOUND
+                                ? r.getStatus() == SPFail.KEY_NOT_FOUND
                                 : r.hasSucceeded() && java.util.Arrays.equals(want, r.getData());
                             if (!ok && failures.size() < 20) {
                                 failures.add("read " + k + " -> " + r);
@@ -589,7 +589,7 @@ public class CompactionTests {
             try {
                 start.await();
                 for (int i = 0; i < 25; i++) {
-                    PBResult r = ksp.compact();
+                    SPResult r = ksp.compact();
                     if (!r.hasSucceeded()) {
                         failures.add("compact -> " + r);
                     }
@@ -619,7 +619,7 @@ public class CompactionTests {
             for (int k = t * keysPerThread; k < (t + 1) * keysPerThread; k++) {
                 byte[] want = models.get(t).get(k);
                 if (want == null) {
-                    assertFail(PBFail.KEY_NOT_FOUND, reopened.read(k));
+                    assertFail(SPFail.KEY_NOT_FOUND, reopened.read(k));
                 } else {
                     assertArrayEquals(want, data(reopened.read(k)), "key " + k);
                 }

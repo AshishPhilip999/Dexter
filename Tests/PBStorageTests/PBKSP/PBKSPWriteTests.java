@@ -11,9 +11,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 import Utility.Serialization.Serializer;
@@ -81,9 +81,9 @@ public class PBKSPWriteTests {
         PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
         byte[] payload = { 4, 5, 6 };
 
-        PBResult status = ksp.write(1, payload);
+        SPResult status = ksp.write(1, payload);
 
-        assertEquals(PBSuccess.WRITE, status.getStatus());
+        assertEquals(SPSuccess.WRITE, status.getStatus());
         assertSuccess(status);
         assertArrayEquals(payload, data(status));
         assertNull(dataArray(status));
@@ -92,39 +92,39 @@ public class PBKSPWriteTests {
     @Test
     public void writeNullKeyFails() throws Exception {
         PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
-        assertFail(PBFail.NULL_KEY, ksp.write(null, bytes(5, 1)));
+        assertFail(SPFail.NULL_KEY, ksp.write(null, bytes(5, 1)));
     }
 
     @Test
     public void writeNullDataFails() throws Exception {
         PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
-        assertFail(PBFail.NULL_WRITE, ksp.write(1, null));
+        assertFail(SPFail.NULL_WRITE, ksp.write(1, null));
     }
 
     @Test
     public void writeEmptyDataFails() throws Exception {
         PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
-        assertFail(PBFail.NULL_WRITE, ksp.write(1, new byte[0]));
+        assertFail(SPFail.NULL_WRITE, ksp.write(1, new byte[0]));
     }
 
     @Test
     public void writeNullKeyIsCheckedBeforeData() throws Exception {
         PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
-        assertFail(PBFail.NULL_KEY, ksp.write(null, null));
+        assertFail(SPFail.NULL_KEY, ksp.write(null, null));
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
     @Test
     public void writeKeyOfWrongTypeFails() throws Exception {
         PBKeyStorageProvider raw = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
-        assertFail(PBFail.KEY_TYPE_MISMATCH, raw.write("not-an-int", bytes(5, 1)));
+        assertFail(SPFail.KEY_TYPE_MISMATCH, raw.write("not-an-int", bytes(5, 1)));
     }
 
     @Test
     public void writeUnencodableKeyFails() throws Exception {
         PBKeyStorageProvider<UnencodableKey> ksp =
             track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), UnencodableKey.class));
-        assertFail(PBFail.KEY_ENCODE_ERROR, ksp.write(new UnencodableKey(), bytes(5, 1)));
+        assertFail(SPFail.KEY_ENCODE_ERROR, ksp.write(new UnencodableKey(), bytes(5, 1)));
     }
 
     @Test
@@ -140,7 +140,7 @@ public class PBKSPWriteTests {
     @Test
     public void writeOneByteOverMaxRecordSizeIncludingKeyFails() throws Exception {
         PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
-        assertFail(PBFail.DATA_TOO_LARGE, ksp.write(1, bytes(MAX_RECORD - INT_KEY_BYTES + 1, 3)));
+        assertFail(SPFail.DATA_TOO_LARGE, ksp.write(1, bytes(MAX_RECORD - INT_KEY_BYTES + 1, 3)));
     }
 
     @Test
@@ -293,10 +293,10 @@ public class PBKSPWriteTests {
             ksp.write(i, bytes(10, i));
         }
 
-        PBResult status = ksp.write(bytes(3, 9));
+        SPResult status = ksp.write(bytes(3, 9));
 
-        assertEquals(PBSuccess.WRITE, status.getStatus());
-        assertFail(PBFail.KEY_NOT_FOUND, ksp.read(0));
+        assertEquals(SPSuccess.WRITE, status.getStatus());
+        assertFail(SPFail.KEY_NOT_FOUND, ksp.read(0));
         assertFalse(ksp.containsKey(0));
         byte[][] records = dataArray(ksp.read());
         assertEquals(1, records.length);
@@ -312,7 +312,7 @@ public class PBKSPWriteTests {
         ksp.write(2, bytes(10, 2));
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(1));
         assertArrayEquals(bytes(10, 2), data(reopened.read(2)));
         assertThrows(IllegalStateException.class, () -> track(new PBKeyStorageProvider<>(released(path), String.class)));
     }
@@ -322,7 +322,7 @@ public class PBKSPWriteTests {
         PBKeyStorageProvider<Integer> ksp = track(new PBKeyStorageProvider<>(released(storagePath(dir, "ksp")), Integer.class));
         ksp.write(1, bytes(10, 1));
 
-        assertFail(PBFail.NULL_WRITE, ksp.write(null));
+        assertFail(SPFail.NULL_WRITE, ksp.write(null));
 
         assertArrayEquals(bytes(10, 1), data(ksp.read(1)));
     }
@@ -339,7 +339,7 @@ public class PBKSPWriteTests {
 
         assertEquals(lengthForPages(1), fileLength(path));
         assertArrayEquals(bytes(VALUE_SIZE, 77), data(ksp.read(1000)));
-        assertFail(PBFail.KEY_NOT_FOUND, ksp.read(0));
+        assertFail(SPFail.KEY_NOT_FOUND, ksp.read(0));
     }
 
     @Test

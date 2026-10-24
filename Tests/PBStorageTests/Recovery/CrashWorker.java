@@ -2,8 +2,8 @@ package PBStorageTests.Recovery;
 
 import java.io.PrintStream;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
 import Utility.StorageProviders.PageBasedStorageProvider.Durability;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 
@@ -27,14 +27,14 @@ public final class CrashWorker {
         out.flush();
 
         for (int i = 0; ; i++) {
-            PBResult result = CrashScript.apply(storage, CrashScript.op(seed, i, keys));
-            if (!result.hasSucceeded() && result.getStatus() != PBFail.KEY_NOT_FOUND) {
+            SPResult result = CrashScript.apply(storage, CrashScript.op(seed, i, keys));
+            if (!result.hasSucceeded() && result.getStatus() != SPFail.KEY_NOT_FOUND) {
                 out.println("FAILED " + i + " " + result);
                 out.flush();
                 System.exit(3);
             }
             if (compactEvery > 0 && i % compactEvery == compactEvery - 1) {
-                PBResult compacted = storage.compact();
+                SPResult compacted = storage.compact();
                 if (!compacted.hasSucceeded()) {
                     out.println("FAILED compact " + compacted);
                     out.flush();

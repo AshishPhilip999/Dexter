@@ -18,8 +18,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.PBStorageProvider;
 
@@ -122,7 +122,7 @@ public class PBKSPIndexTests {
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
         assertTrue(indexFile(path).isFile());
         assertArrayEquals(bytes(30, 99), data(reopened.read(5)));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(6));
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(6));
         assertArrayEquals(bytes(20, 1_999), data(reopened.read(1_999)));
         assertEquals(1_999, dataArray(reopened.read()).length);
     }
@@ -157,7 +157,7 @@ public class PBKSPIndexTests {
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(b), Integer.class));
         assertArrayEquals(bytes(10, 2), data(reopened.read(4)));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(1));
     }
 
     @Test
@@ -198,7 +198,7 @@ public class PBKSPIndexTests {
         ksp.reconstructKeyIndex();
 
         assertArrayEquals(bytes(10, 499), data(ksp.read(499)));
-        assertFail(PBFail.KEY_NOT_FOUND, ksp.read(500));
+        assertFail(SPFail.KEY_NOT_FOUND, ksp.read(500));
         assertSuccess(ksp.write(2_000, bytes(10, 7)));
         assertArrayEquals(bytes(10, 7), data(track(new PBKeyStorageProvider<>(released(path), Integer.class)).read(2_000)));
     }
@@ -237,7 +237,7 @@ public class PBKSPIndexTests {
         track(new PBStorageProvider(released(path))).write(bytes(3, 9));
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(0));
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(0));
         assertSuccess(reopened.write(0, bytes(10, 5)));
         assertArrayEquals(bytes(10, 5), data(reopened.read(0)));
         assertEquals(2, dataArray(reopened.read()).length);
@@ -254,8 +254,8 @@ public class PBKSPIndexTests {
         track(new PBStorageProvider(released(path))).delete();
 
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(50));
-        assertFail(PBFail.NULL_READ, reopened.read());
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(50));
+        assertFail(SPFail.NULL_READ, reopened.read());
     }
 
     @Test
@@ -273,7 +273,7 @@ public class PBKSPIndexTests {
         checkpointIfOpen(path);
         assertTrue(indexFile(path).length() < before);
         PBKeyStorageProvider<Integer> reopened = track(new PBKeyStorageProvider<>(released(path), Integer.class));
-        assertFail(PBFail.KEY_NOT_FOUND, reopened.read(1));
+        assertFail(SPFail.KEY_NOT_FOUND, reopened.read(1));
         assertSuccess(reopened.write(1, bytes(10, 1)));
     }
 
@@ -289,9 +289,9 @@ public class PBKSPIndexTests {
         assertSuccess(ksp.write(atLimit, bytes(10, 1)));
         assertArrayEquals(bytes(10, 1), data(track(new PBKeyStorageProvider<>(released(path), String.class)).read(atLimit)));
 
-        assertFail(PBFail.KEY_TOO_LARGE, ksp.write(overLimit, bytes(10, 1)));
-        assertFail(PBFail.KEY_NOT_FOUND, ksp.read(overLimit));
-        assertFail(PBFail.KEY_NOT_FOUND, ksp.delete(overLimit));
+        assertFail(SPFail.KEY_TOO_LARGE, ksp.write(overLimit, bytes(10, 1)));
+        assertFail(SPFail.KEY_NOT_FOUND, ksp.read(overLimit));
+        assertFail(SPFail.KEY_NOT_FOUND, ksp.delete(overLimit));
         assertFalse(ksp.containsKey(overLimit));
     }
 
@@ -336,11 +336,11 @@ public class PBKSPIndexTests {
                 model.put(key, value);
             } else if (choice < 7) {
                 boolean present = model.remove(key) != null;
-                assertEquals(present ? PBSuccess.DELETE : PBFail.KEY_NOT_FOUND, ksp.delete(key).getStatus(), "delete, op " + op);
+                assertEquals(present ? SPSuccess.DELETE : SPFail.KEY_NOT_FOUND, ksp.delete(key).getStatus(), "delete, op " + op);
             } else {
                 byte[] expected = model.get(key);
                 if (expected == null) {
-                    assertFail(PBFail.KEY_NOT_FOUND, ksp.read(key));
+                    assertFail(SPFail.KEY_NOT_FOUND, ksp.read(key));
                 } else {
                     assertArrayEquals(expected, data(ksp.read(key)), "read, op " + op);
                 }

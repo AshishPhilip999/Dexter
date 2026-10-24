@@ -8,7 +8,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
 
-import StorageStatus.PB.PBResult;
+import StorageStatus.SP.SPResult;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 
 /*
@@ -56,7 +56,7 @@ final class CrashScript {
         return new Op(false, key, value);
     }
 
-    static PBResult apply(PBKeyStorageProvider<Integer> storage, Op op) {
+    static SPResult apply(PBKeyStorageProvider<Integer> storage, Op op) {
         return op.delete ? storage.delete(op.key) : storage.write(op.key, op.value);
     }
 
@@ -96,7 +96,7 @@ final class CrashScript {
     static Map<Integer, byte[]> contents(PBKeyStorageProvider<Integer> storage, int keys) {
         Map<Integer, byte[]> actual = new HashMap<>();
         for (int key = 0; key < keys; key++) {
-            PBResult result = storage.read(key);
+            SPResult result = storage.read(key);
             if (result.hasSucceeded()) {
                 actual.put(key, result.getData());
             } else if (result.getError() != null) {

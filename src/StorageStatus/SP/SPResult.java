@@ -1,30 +1,34 @@
-package StorageStatus.PB;
+package StorageStatus.SP;
 
 /*
-Result of one read, write or delete. Every call returns a new PBResult, so a
-result keeps its own data: it can be stored, compared with later results, or
-handed to another thread.
+Result of one storage operation (read, write, delete, ...). Every call returns
+a new result, so a result keeps its own data: it can be stored, compared with
+later results, or handed to another thread.
 
-    PBResult result = storage.read(42);
+    SPResult result = storage.read(42);
     if (result.hasSucceeded()) {
         byte[] data = result.getData();
-    } else if (result.getStatus() == PBFail.KEY_NOT_FOUND) {
+    } else if (result.getStatus() == SPFail.KEY_NOT_FOUND) {
         ...
     } else if (result.getError() != null) {
         log(result.getError());     // why a READ_ERROR / WRITE_ERROR / ... happened
     }
 
 hasSucceeded() is the overall pass/fail check. getStatus() is the detailed
-outcome: a PBSuccess (READ, WRITE, DELETE) or a PBFail value.
+outcome: a SPSuccess (READ, WRITE, DELETE, ...) or a SPFail value.
+
+Results can't be changed after they are made: the fields are final and so are
+the getters. Subclasses may only add to it -- ContainerCore.Container.ContainerResult
+adds the stored value as an object.
 */
-public final class PBResult {
+public class SPResult {
     /*
-    True if the operation passed (getStatus() is a PBSuccess), false if it
-    failed (getStatus() is a PBFail).
+    True if the operation passed (getStatus() is a SPSuccess), false if it
+    failed (getStatus() is a SPFail).
     */
     private final boolean hasSucceeded;
 
-    private final PBStatus status;
+    private final SPStatus status;
 
     /*
     READ:  the record read by read() / read(key); for the keyed read(), the
@@ -47,11 +51,11 @@ public final class PBResult {
     */
     private final Exception error;
 
-    private PBResult(PBStatus status, byte[] data, byte[][] dataArray, Exception error) {
+    protected SPResult(SPStatus status, byte[] data, byte[][] dataArray, Exception error) {
         if (status == null) {
             throw new IllegalArgumentException("Status cannot be null");
         }
-        this.hasSucceeded = status instanceof PBSuccess;
+        this.hasSucceeded = status instanceof SPSuccess;
         this.status = status;
         this.data = data;
         this.dataArray = dataArray;
@@ -59,55 +63,62 @@ public final class PBResult {
     }
 
     /*
+    A copy of another result (for subclasses that wrap one).
+    */
+    protected SPResult(SPResult result) {
+        this(result.status, result.data, result.dataArray, result.error);
+    }
+
+    /*
     A result with no data (failures, DELETE).
     */
-    public static PBResult of(PBStatus status) {
-        return new PBResult(status, null, null, null);
+    public static SPResult of(SPStatus status) {
+        return new SPResult(status, null, null, null);
     }
 
     /*
     A result carrying one record (READ) or the written data (WRITE).
     */
-    public static PBResult of(PBStatus status, byte[] data) {
-        return new PBResult(status, data, null, null);
+    public static SPResult of(SPStatus status, byte[] data) {
+        return new SPResult(status, data, null, null);
     }
 
     /*
     A result carrying several records. getData() returns the first one.
     */
-    public static PBResult ofAll(PBStatus status, byte[][] dataArray) {
+    public static SPResult ofAll(SPStatus status, byte[][] dataArray) {
         byte[] first = (dataArray != null && dataArray.length > 0) ? dataArray[0] : null;
-        return new PBResult(status, first, dataArray, null);
+        return new SPResult(status, first, dataArray, null);
     }
 
     /*
     A failure caused by an exception: READ_ERROR, WRITE_ERROR, DELETE_ERROR,
-    COMPACT_ERROR, KEY_ENCODE_ERROR. Takes a PBFail, so a success can never
+    COMPACT_ERROR, KEY_ENCODE_ERROR, ... Takes a SPFail, so a success can never
     carry an error.
     */
-    public static PBResult ofError(PBFail status, Exception error) {
-        return new PBResult(status, null, null, error);
+    public static SPResult ofError(SPFail status, Exception error) {
+        return new SPResult(status, null, null, error);
     }
 
     /*
-    The detailed outcome: a PBSuccess or a PBFail value.
+    The detailed outcome: a SPSuccess or a SPFail value.
     */
-    public PBStatus getStatus() {
+    public final SPStatus getStatus() {
         return this.status;
     }
 
     /*
     Overall check: true if the operation passed, false if it failed.
     */
-    public boolean hasSucceeded() {
+    public final boolean hasSucceeded() {
         return this.hasSucceeded;
     }
 
-    public byte[] getData() {
+    public final byte[] getData() {
         return this.data;
     }
 
-    public byte[][] getDataArray() {
+    public final byte[][] getDataArray() {
         return this.dataArray;
     }
 
@@ -115,7 +126,7 @@ public final class PBResult {
     Why the operation failed, when an exception caused it; null otherwise
     (including every success). Check getStatus() for what failed.
     */
-    public Exception getError() {
+    public final Exception getError() {
         return this.error;
     }
 

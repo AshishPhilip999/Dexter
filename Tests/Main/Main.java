@@ -1,49 +1,55 @@
 package Main;
 
 import java.io.Serializable;
+import java.util.List;
 
-import StorageStatus.PB.PBResult;
-import Utility.Serialization.Serializer;
-import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
+import ContainerCore.Container.ContainerResult;
+import ContainerCore.Container.KeyContainer;
+import ContainerCore.Utility.ContainerLimitType;
 
 public class Main {
     public static void main(String[] args) {
         String path = "/Users/ashish-21172/Desktop/";
-        String containerName = path + "PBStorage";
+        String containerName = path + "PBStorage2";
 
         try {
-            PBKeyStorageProvider<Integer> sp = new PBKeyStorageProvider<>(containerName, Integer.class);
-            TestObject tO1 = new TestObject("TO 1");
-            byte[] data1 = Serializer.serialize(tO1);
+            KeyContainer<Integer, TestObject> container = new KeyContainer<>(containerName, Integer.class, TestObject.class, ContainerLimitType.BYTES, 156);
+            TestObject[] objs = { new TestObject("Amidetho Gozaimas"), new TestObject("Hola") };
 
-            PBResult result = sp.write(1, data1);
-            // PBResult result = sp.read(1);
+            container.size();
 
-            if (result.hasSucceeded()) {
-                byte[] data = result.getData();
-                TestObject obj = Serializer.deserialize(data);
-
-                System.out.println(obj.value);
-            } else {
-                System.out.println(result.getError());
-            }
-
-            sp.close();
-
-            // PBKeyStorageProvider<Integer> sp2 = new PBKeyStorageProvider<>(containerName, Integer.class);
-
-            // PBResult result2 = sp2.read(1);
-
-            // if (result2.hasSucceeded()) {
-            //     byte[] data = result2.getData();
-            //     TestObject obj = Serializer.deserialize(data);
-
-            //     System.out.println(obj.value);
-            // } else {
-            //     System.out.println(result2.getError());
+            // int key = 10;
+            // for(TestObject obj : objs) {
+            //     ContainerResult<TestObject> result = container.write(key++, obj);
+            //     if(result.hasSucceeded()) {
+            //         System.out.println(result.getStatus());
+            //     } else {
+            //         System.out.println(result.getStatus());
+            //     }
             // }
 
-            // sp2.close();
+            // ContainerResult<TestObject> result = container.delete();
+            // if (result.hasSucceeded()) {
+            //     System.out.println(result.getStatus());
+            // } else {
+            //     System.out.println(result.getStatus());
+            // }
+
+            ContainerResult<TestObject> results = container.read();
+            if (results.hasSucceeded()) {
+                List<TestObject> list = results.getValues();
+
+                for(TestObject obj : list) {
+                    System.out.println(obj.value);
+                    // for(byte[] data : results.getDataArray()) {
+                    //     System.out.println(data.length);
+                    // }
+                }
+            } else {
+                System.out.println(results.getStatus());
+            }
+
+            container.close();
 
         } catch (Exception e) {
             System.out.println(e);

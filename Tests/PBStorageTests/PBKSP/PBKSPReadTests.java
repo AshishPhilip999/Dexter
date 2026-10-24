@@ -11,9 +11,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBFail;
-import StorageStatus.PB.PBResult;
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPFail;
+import StorageStatus.SP.SPResult;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.Serialization.Serializer;
 
@@ -37,9 +37,9 @@ public class PBKSPReadTests {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
 
-        PBResult status = ksp.read(1);
+        SPResult status = ksp.read(1);
 
-        assertEquals(PBSuccess.READ, status.getStatus());
+        assertEquals(SPSuccess.READ, status.getStatus());
         assertSuccess(status);
         assertArrayEquals(bytes(10, 1), data(status));
         assertNull(dataArray(status));
@@ -47,19 +47,19 @@ public class PBKSPReadTests {
 
     @Test
     public void readKeyOnEmptyStorageReturnsKeyNotFound() throws Exception {
-        assertFail(PBFail.KEY_NOT_FOUND, newStorage().read(1));
+        assertFail(SPFail.KEY_NOT_FOUND, newStorage().read(1));
     }
 
     @Test
     public void readUnknownKeyReturnsKeyNotFound() throws Exception {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
-        assertFail(PBFail.KEY_NOT_FOUND, ksp.read(2));
+        assertFail(SPFail.KEY_NOT_FOUND, ksp.read(2));
     }
 
     @Test
     public void readNullKeyFails() throws Exception {
-        assertFail(PBFail.NULL_KEY, newStorage().read(null));
+        assertFail(SPFail.NULL_KEY, newStorage().read(null));
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
@@ -67,7 +67,7 @@ public class PBKSPReadTests {
     public void readKeyOfWrongTypeFails() throws Exception {
         PBKeyStorageProvider raw = newStorage();
         raw.write(1, bytes(10, 1));
-        assertFail(PBFail.KEY_TYPE_MISMATCH, raw.read("1"));
+        assertFail(SPFail.KEY_TYPE_MISMATCH, raw.read("1"));
     }
 
     @Test
@@ -102,7 +102,7 @@ public class PBKSPReadTests {
         PBKeyStorageProvider<Integer> ksp = newStorage();
         ksp.write(1, bytes(10, 1));
         ksp.write(bytes(3, 9));
-        assertFail(PBFail.KEY_NOT_FOUND, ksp.read(1));
+        assertFail(SPFail.KEY_NOT_FOUND, ksp.read(1));
     }
 
     @Test
@@ -123,7 +123,7 @@ public class PBKSPReadTests {
 
     @Test
     public void readAllOnEmptyStorageReturnsNullRead() throws Exception {
-        assertFail(PBFail.NULL_READ, newStorage().read());
+        assertFail(SPFail.NULL_READ, newStorage().read());
     }
 
     @Test
@@ -133,9 +133,9 @@ public class PBKSPReadTests {
             ksp.write(i, Serializer.serialize("value-" + i));
         }
 
-        PBResult status = ksp.read();
+        SPResult status = ksp.read();
 
-        assertEquals(PBSuccess.READ, status.getStatus());
+        assertEquals(SPSuccess.READ, status.getStatus());
         byte[][] records = dataArray(status);
         assertEquals(10, records.length);
 
@@ -164,7 +164,7 @@ public class PBKSPReadTests {
         ksp.write(1, bytes(4, 1));
         ksp.write(2, bytes(4, 2));
 
-        PBResult status = ksp.read();
+        SPResult status = ksp.read();
         byte[][] records = dataArray(status);
         assertArrayEquals(records[0], data(status));
     }

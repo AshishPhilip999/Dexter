@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-import StorageStatus.PB.PBSuccess;
+import StorageStatus.SP.SPSuccess;
 import Utility.StorageProviders.PageBasedStorageProvider.Durability;
 import Utility.StorageProviders.PageBasedStorageProvider.PBKeyStorageProvider;
 import Utility.StorageProviders.PageBasedStorageProvider.Journal.Journal;
@@ -404,7 +404,7 @@ public class RecoveryTests {
         run(storage, 27, 0, 200);
         assertTrue(journalOf(path).length() > DexFiles.HEADER_ONLY);
 
-        assertEquals(PBSuccess.CHECKPOINT, storage.checkpoint().getStatus());
+        assertEquals(SPSuccess.CHECKPOINT, storage.checkpoint().getStatus());
 
         assertEquals(DexFiles.HEADER_ONLY, journalOf(path).length());
         assertEquals(storage.getFileSize(), datFile(path).length(), "data.pb holds everything");
@@ -421,7 +421,7 @@ public class RecoveryTests {
         PBKeyStorageProvider<Integer> storage = track(new PBKeyStorageProvider<>(released(path), Integer.class, Durability.SYNC));
         assertEquals(Durability.SYNC, storage.getDurability());
         assertSuccess(storage.write(1, bytes(10, 1)));
-        assertEquals(PBSuccess.SYNC, storage.sync().getStatus());
+        assertEquals(SPSuccess.SYNC, storage.sync().getStatus());
         assertEquals(Durability.NORMAL, open(storagePath(dir, "other")).getDurability());
         assertThrows(IllegalArgumentException.class, () -> new PBKeyStorageProvider<>(storagePath(dir, "x"), Integer.class, null));
     }
@@ -463,8 +463,8 @@ final class PBResult0 {
     private PBResult0() {
     }
 
-    static void check(StorageStatus.PB.PBResult result, int i) {
-        if (!result.hasSucceeded() && result.getStatus() != StorageStatus.PB.PBFail.KEY_NOT_FOUND) {
+    static void check(StorageStatus.SP.SPResult result, int i) {
+        if (!result.hasSucceeded() && result.getStatus() != StorageStatus.SP.SPFail.KEY_NOT_FOUND) {
             throw new AssertionError("operation " + i + " -> " + result);
         }
     }
